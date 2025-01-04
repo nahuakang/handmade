@@ -5,15 +5,32 @@ user32 :: #system_library "user32";
 gdi    :: #system_library "Gdi32";
 
 /*
+Win32: Missing Virtual-Key Codes
+https://learn.microsoft.com/en-us/windows/win32/inputdev/virtual-key-codes
+*/
+VK_A :: 0x41;
+VK_D :: 0x44;
+VK_E :: 0x45;
+VK_Q :: 0x51;
+VK_S :: 0x53;
+VK_W :: 0x57;
+
+/*
+Win32: Missing winerror
+https://learn.microsoft.com/en-us/windows/win32/debug/system-error-codes--0-499-
+*/
+ERROR_SUCCESS :: 0x0;
+
+/*
 Win32: Missing structs
 */
 PAINTSTRUCT     :: struct {
-	hdc         :  HDC;
-	fErase      :  BOOL;
-	rcPaint     :  RECT;
-	fRestore    :  BOOL;
-	fIncUpdate  :  BOOL;
-	rgbReserved :  [32]u8;
+    hdc         :  HDC;
+    fErase      :  BOOL;
+    rcPaint     :  RECT;
+    fRestore    :  BOOL;
+    fIncUpdate  :  BOOL;
+    rgbReserved :  [32]u8;
 }
 
 /*
