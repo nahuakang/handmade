@@ -1,10 +1,11 @@
 #import "Basic";
 #import "Gamepad";
-// #import "Gamepad/Xinput";
+#import "Sound_Player";
 #import "Windows";
 #import "Windows_Utf8";
 
 #load "windows.jai"; // Patching Windows module in Jai
+#load "dsound.jai";  // Patching Sound_Player module in Jai
 
 /*
 Handmade Hero Structs
@@ -106,6 +107,66 @@ win32_display_buffer_window :: (device_context: HDC, window_width: s32, window_h
                   *buffer.info,
                   DIB_RGB_COLORS,
                   ROP.SRCCOPY);
+}
+
+
+win32_init_dsound :: (window: HWND, samples_per_sec: s32, secondary_buffer_size: s32) {
+    // Get a IDirectSound8 object
+    dsound: *IDirectSound8;
+    hr := DirectSoundCreate8(null, *dsound, null);
+    if !SUCCEEDED(hr) log_error("DirectSoundCreate8 failed!\n");
+
+    hr = dsound.SetCooperativeLevel(dsound, window, DSSCL_PRIORITY);
+    if !SUCCEEDED(hr) log_error("SetCooperativeLevel failed! HWND %.\n", window);
+
+    // Get the primary buffer
+    dsbd:              DSBUFFERDESC;
+    dsbd.dwSize        = size_of(DSBUFFERDESC);
+    dsbd.dwFlags       = DSBCAPS_PRIMARYBUFFER;
+    dsbd.dwBufferBytes = PRIMARY_BUFFER_SIZE_IN_BYTES;
+    primary_buffer     : *IDirectSoundBuffer8;
+
+    if !SUCCEEDED(dsound.CreateSoundBuffer(dsound, *dsbd, *primary_buffer, null))
+        log_error("CreateSoundBuffer for primary buffer failed!\n");
+
+    // Set the wave format
+    // See backend_init proc in jai/modules/Sound_Player/os/win32.jai for more details
+    num_channels     := 2;
+    channel_mask:    s64;
+    if num_channels  == 2 {
+        channel_mask = KSAUDIO_SPEAKER_STEREO;
+    } else {
+        channel_mask = KSAUDIO_SPEAKER_5POINT1_SURROUND;
+    }
+
+    KSDATAFORMAT_SUBTYPE_PCM   : GUID;
+    init_KSDATAFORMAT_SUBTYPE_PCM(*KSDATAFORMAT_SUBTYPE_PCM);
+    wfx:                       WAVEFORMATEXTENSIBLE;
+    init_wave_format(*wfx.Format, cast(s16) num_channels);
+    wfx.Format.wFormatTag      = WAVE_FORMAT_EXTENSIBLE;
+    wfx.Format.nChannels       = 2;
+    wfx.Format.nSamplesPerSec  = samples_per_sec;
+    wfx.Format.wBitsPerSample  = 16;
+    wfx.Format.nBlockAlign     = (wfx.Format.wBitsPerSample / 8) * wfx.Format.nChannels;
+    wfx.Format.nAvgBytesPerSec = wfx.Format.nSamplesPerSec * wfx.Format.nBlockAlign;
+    wfx.Format.cbSize          = 22;
+    wfx.wValidBitsPerSample    = 16;
+    wfx.dwChannelMask          = cast(s32) channel_mask;
+    wfx.SubFormat              = KSDATAFORMAT_SUBTYPE_PCM; // This is necessary!
+
+    hr = primary_buffer.SetFormat(primary_buffer, *wfx.Format);
+    if !SUCCEEDED(hr) log_error("SetFormat failed! wfx.Format is: %\n", wfx.Format);
+
+    // NOTE(nahua): "Create" a secondary buffer
+    sec_buffer:           *IDirectSoundBuffer8;
+    sec_desc:              DSBUFFERDESC;
+    sec_desc.dwSize        = size_of(DSBUFFERDESC);
+    sec_desc.dwFlags       = 0;
+    sec_desc.dwBufferBytes = secondary_buffer_size;
+    sec_desc.lpwfxFormat   = *wfx.Format;
+
+    if !SUCCEEDED(dsound.CreateSoundBuffer(dsound, *sec_desc, *sec_buffer, null))
+        log_error("CreateSoundBuffer for secondary buffer failed!\n");
 }
 
 
@@ -219,6 +280,11 @@ main :: () {
             device_context := GetDC(window);
             x_offset: s32 = 0;
             y_offset: s32 = 0;
+
+            samples_per_sec: s32       = 48000;
+            bytes_per_sample: s32      = size_of(s16) * 2;
+            secondary_buffer_size: s32 = 2 * samples_per_sec * bytes_per_sample;
+            win32_init_dsound(window, samples_per_sec, secondary_buffer_size);
 
             global_running = true;
             while global_running {
