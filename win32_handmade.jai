@@ -1,5 +1,6 @@
 #import "Basic";
 #import "Gamepad";
+#import "Math";
 #import "Sound_Player";
 #import "Windows";
 #import "Windows_Utf8";
@@ -22,9 +23,23 @@ Win32OffscreenBuffer :: struct {
     bytes_per_pixel  : s32;
 }
 
-Win32WindowDimension :: struct {
-    width            : s32;
-    height           : s32;
+
+Win32WindowDimension   :: struct {
+    width              : s32;
+    height             : s32;
+}
+
+
+Win32SoundOutput         :: struct {
+    samples_per_second   : s32;
+    bytes_per_sample     : s32;
+    secondary_buffer_size: s32;
+    running_sample_index : u32;
+    tone_hz              : s32;
+    tone_volume          : s32;
+    wave_period          : s32;
+    tsine                : float32;
+    latency_sample_count : s32;
 }
 
 
@@ -170,6 +185,66 @@ win32_init_dsound :: (window: HWND, samples_per_second: s32, secondary_buffer_si
 }
 
 
+win32_fill_sound_buffer :: (sound_output: *Win32SoundOutput, byte_to_lock: s32, bytes_to_write: s32) {
+    region1, region2:           *void;
+    region1_size, region2_size: s32;
+
+    hr := global_secondary_buffer.Lock(global_secondary_buffer,
+                                       cast(s32) byte_to_lock,
+                                       cast(s32) bytes_to_write,
+                                       *region1, *region1_size,
+                                       *region2, *region2_size,
+                                       0);
+    if SUCCEEDED(hr) {
+        // TODO(nahua): Assert that Region1Size/Region2Size are valid
+        sample_out: *s16 = cast(*s16) region1;
+        region1_sample_count: s32 = region1_size / sound_output.bytes_per_sample;
+
+        sample_index: s32 = 0;
+        while sample_index < region1_sample_count {
+            defer sample_index += 1;
+            defer sound_output.running_sample_index += 1;
+
+            sine_value: float32 = sin(sound_output.tsine);
+            sample_value: s16 = cast(s16) (sine_value * cast(float32) sound_output.tone_volume);
+
+            << sample_out = sample_value;
+            sample_out += 1;
+            << sample_out = sample_value;
+            sample_out += 1;
+
+            sound_output.tsine += 2.0 * PI / (cast(float32) sound_output.wave_period);
+        }
+
+        sample_out = cast(*s16) region2;
+        region2_sample_count: s32 = region2_size / sound_output.bytes_per_sample;
+
+        sample_index = 0;
+        while sample_index < region2_sample_count {
+            defer sample_index += 1;
+            defer sound_output.running_sample_index += 1;
+
+            sine_value: float32 = sin(sound_output.tsine);
+            sample_value: s16 = cast(s16) (sine_value * cast(float32) sound_output.tone_volume);
+
+            << sample_out = sample_value;
+            sample_out += 1;
+            << sample_out = sample_value;
+            sample_out += 1;
+
+            sound_output.tsine += 2.0 * PI / (cast(float32) sound_output.wave_period);
+        }
+
+        global_secondary_buffer.Unlock(global_secondary_buffer, region1, region1_size, region2, region2_size);
+    }
+    // else {
+    //     print("global_secondary_buffer.Lock failed: %, %, %. hr: %\n", global_secondary_buffer, byte_to_lock, bytes_to_write, hr);
+    //     print("performing exit(1)\n");
+    //     exit(1);
+    // }
+}
+
+
 /*
 win32_window_callback corresponds to Win32MainWindowCallback.
 */
@@ -281,18 +356,19 @@ main :: () {
             x_offset: s32 = 0;
             y_offset: s32 = 0;
 
-            // NOTE(nahua): Sound test constants
-            samples_per_second: s32    = 48000;
-            bytes_per_sample: s32      = size_of(s16) * 2;
-            secondary_buffer_size: s32 = 2 * samples_per_second * bytes_per_sample;
-            running_sample_index: u32  = 0;
-            tone_hz: s32               = 256;
-            square_wave_period        := samples_per_second / tone_hz;
-            half_square_wave_period   := square_wave_period / 2;
-            tone_volume: s32           = 3000;
-
-            win32_init_dsound(window, samples_per_second, secondary_buffer_size);
-            sound_is_playing := false;
+            // NOTE(nahua): Sound test
+            sound_output: Win32SoundOutput;
+            sound_output.samples_per_second    = 48000;
+            sound_output.bytes_per_sample      = size_of(s16) * 2;
+            sound_output.secondary_buffer_size = 2 * sound_output.samples_per_second * sound_output.bytes_per_sample;
+            sound_output.running_sample_index  = 0;
+            sound_output.tone_hz               = 256;
+            sound_output.wave_period           = sound_output.samples_per_second / sound_output.tone_hz;
+            sound_output.tone_volume           = 3000;
+            sound_output.latency_sample_count  = sound_output.samples_per_second / 15;
+            win32_init_dsound(window, sound_output.samples_per_second, sound_output.secondary_buffer_size);
+            win32_fill_sound_buffer(*sound_output, 0, sound_output.latency_sample_count * sound_output.bytes_per_sample);
+            global_secondary_buffer.Play(global_secondary_buffer, 0, 0, DSBPLAY_LOOPING);
 
             global_running = true;
             while global_running {
@@ -324,12 +400,13 @@ main :: () {
                         y              := (buttons & XINPUT_GAMEPAD_Y)                   != 0;
 
                         pad            := state.Gamepad;
-                        stick_x        := pad.sThumbLX;
-                        stick_y        := pad.sThumbLY;
+                        stick_x        := pad.sThumbLX; // s16
+                        stick_y        := pad.sThumbLY; // s16
                         x_offset += stick_x >> 12;
                         y_offset += stick_y >> 12;
-                        print("x_offset is %\n", x_offset);
-                        print("y_offset is %\n", y_offset);
+
+                        sound_output.tone_hz = 512 + (cast(s32) ((cast(float32) 256) * ((cast(float32) stick_x) / 30000.0)));
+                        sound_output.wave_period = sound_output.samples_per_second / sound_output.tone_hz;
                     } else {
 						// NOTE(nahua): This controller is not available
                     }
@@ -341,84 +418,30 @@ main :: () {
                 XInputSetState(0, *vibration);
 
                 render_weird_gradient(*global_back_buffer, x_offset, y_offset);
-                x_offset += 1;
+                defer x_offset += 1;
 
                 // NOTE(nahua): DirectSound output test
-                play_cursor: s32;
-                write_cursor:s32;
+                play_cursor  :s32;
+                write_cursor :s32;
                 hr := global_secondary_buffer.GetCurrentPosition(global_secondary_buffer, *play_cursor, *write_cursor);
                 if SUCCEEDED(hr) {
-                    byte_to_lock:  s32 = ((cast(s32) running_sample_index) * bytes_per_sample) % secondary_buffer_size;
+                    byte_to_lock: s32 = ((cast(s32) sound_output.running_sample_index) * sound_output.bytes_per_sample) % sound_output.secondary_buffer_size;
+                    target_cursor: s32 = (play_cursor + (sound_output.latency_sample_count * sound_output.bytes_per_sample)) % sound_output.secondary_buffer_size;
                     bytes_to_write: s32;
-                    if byte_to_lock == play_cursor {
-                        bytes_to_write = secondary_buffer_size;
-                    } else if byte_to_lock > play_cursor {
+
+                    if byte_to_lock > target_cursor {
                         // Play cursor is behind
-                        bytes_to_write = secondary_buffer_size - byte_to_lock; // region 1
-                        bytes_to_write += play_cursor;                         // region 2
+                        bytes_to_write = sound_output.secondary_buffer_size - byte_to_lock; // region 1
+                        bytes_to_write += target_cursor;                                      // region 2
                     } else {
                         // Play cursor is in front
-                        bytes_to_write = play_cursor - byte_to_lock;           // region 1
+                        bytes_to_write = target_cursor - byte_to_lock;                        // region 1
                     }
-
-                    region1, region2:           *void;
-                    region1_size, region2_size: s32;
-
-                    if SUCCEEDED(global_secondary_buffer.Lock(global_secondary_buffer,
-                                                              cast(s32) byte_to_lock,
-                                                              cast(s32) bytes_to_write,
-                                                              *region1, *region1_size,
-                                                              *region2, *region2_size,
-                                                              0))
-                    {
-                        // TODO(nahua): Assert that Region1Size/Region2Size are valid
-                        sample_out: *s16 = cast(*s16) region1;
-                        region1_sample_count: s32 = region1_size / bytes_per_sample;
-                        print("region1_sample_count: %;\n", region1_sample_count);
-
-                        sample_index: s32;
-                        while sample_index < region1_sample_count {
-                            defer sample_index += 1;
-                            sample_value: s16 = cast(s16) ifx (((cast(s32) running_sample_index) / half_square_wave_period) % 2) then tone_volume else -tone_volume;
-                            running_sample_index += 1;
-
-                            << sample_out = sample_value;
-                            sample_out += 1;
-                            << sample_out = sample_value;
-                            sample_out += 1;
-                        }
-
-                        sample_out = cast(*s16) region2;
-                        region2_sample_count: s32 = region2_size / bytes_per_sample;
-                        print("region2_sample_count: %;\n", region2_sample_count);
-
-                        sample_index = 0;
-                        while sample_index < region2_sample_count {
-                            defer sample_index += 1;
-                            sample_value: s16 = cast(s16) ifx (((cast(s32) running_sample_index) / half_square_wave_period) % 2) then tone_volume else -tone_volume;
-                            running_sample_index += 1;
-
-                            << sample_out = sample_value;
-                            sample_out += 1;
-                            << sample_out = sample_value;
-                            sample_out += 1;
-                        }
-
-                        global_secondary_buffer.Unlock(global_secondary_buffer, region1, region1_size, region2, region2_size);
-                    } else {
-                        print("global_secondary_buffer.Lock failed: %, %, %\n", global_secondary_buffer, bytes_to_write, byte_to_lock);
-                        print("performing exit(1)\n");
-                        exit(1);
-                    }
+                    win32_fill_sound_buffer(*sound_output, byte_to_lock, bytes_to_write);
                 } else {
                     print("global_secondary_buffer.GetCurrentPosition call failed!\n");
-                    print("performing exit(1)\n");
-                    exit(1);
-                }
-
-                if !sound_is_playing {
-                    hr := global_secondary_buffer.Play(global_secondary_buffer, 0, 0, DSBPLAY_LOOPING);
-                    if SUCCEEDED(hr) sound_is_playing = true;
+                    // print("performing exit(1)\n");
+                    // exit(1);
                 }
 
                 dimension := win32_get_window_dimension(window);
