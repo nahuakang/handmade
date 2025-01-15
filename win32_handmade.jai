@@ -1,5 +1,25 @@
 #import "Basic";
 #import "Gamepad";
+#if CPU == .X64 {
+    #import "Machine_X64";  // For rdtsc, etc.
+} else {
+    // Poor-man’s replacements for rdtsc.
+    // @TODO: We should probably call something like ARM64 CNTPCTSS_EL0 instead, but the compiler does not support that right now.
+    //  -rluba, 2024-04-22
+    rdtsc :: () -> u64 #expand {
+        #if OS == .WINDOWS {
+            Windows :: #import "Windows";
+            pc: s64;
+            Windows.QueryPerformanceCounter(*pc);
+            return cast,no_check(u64) pc;
+        } else {
+            POSIX ::#import "POSIX";
+            ts: POSIX.timespec;
+            POSIX.clock_gettime(.MONOTONIC_RAW, *ts);
+            return cast,no_check(u64) ts.tv_nsec;
+        }
+    }
+}
 #import "Math";
 #import "Sound_Player";
 #import "Windows";
@@ -322,6 +342,9 @@ win32_window_callback :: (window: HWND, message: u32, wParam: WPARAM, lParam: LP
 main corresponds to WinMain.
 */
 main :: () {
+    perf_count_frequency: s64;
+    QueryPerformanceFrequency(*perf_count_frequency);
+
     init_gamepad();
 
     window_class: WNDCLASSEXW;
@@ -371,6 +394,9 @@ main :: () {
             global_secondary_buffer.Play(global_secondary_buffer, 0, 0, DSBPLAY_LOOPING);
 
             global_running = true;
+            last_counter: s64;
+            QueryPerformanceCounter(*last_counter);
+            last_cycle_count: u64 = rdtsc();
             while global_running {
                 message: MSG;
 
@@ -449,6 +475,24 @@ main :: () {
                                             dimension.width,
                                             dimension.height,
                                             *global_back_buffer);
+
+                end_counter: s64;
+                QueryPerformanceCounter(*end_counter);
+                end_cycle_count: u64 = rdtsc();
+                counter_elapsed := end_counter - last_counter;
+                cycles_elapsed: u64 = end_cycle_count - last_cycle_count;
+
+                ms_per_frame := cast(float32) ((1000 * cast(float32) counter_elapsed) / cast(float32) perf_count_frequency);
+                fps := (cast(float32) perf_count_frequency / cast(float32) counter_elapsed);
+                mega_cycles_per_frame := cast(float32) cycles_elapsed / (1000 * 1000);
+
+                print("ms/frame: %ms\t%FPS\t%Mc/f\n",
+                      formatFloat(ms_per_frame, trailing_width = 2),
+                      formatFloat(fps, trailing_width = 2),
+                      formatFloat(mega_cycles_per_frame, trailing_width = 2));
+
+                last_counter = end_counter;
+                last_cycle_count = end_cycle_count;
             }
         } else {
             // TODO(nahua): Logging
