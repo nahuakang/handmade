@@ -1,3 +1,22 @@
+/*
+  TODO(nahua): THIS IS NOT A FINAL PLATFORM LAYER
+
+  - Saved game locations
+  - Getting a handle to our own executable file
+  - Asset loading path
+  - Multithreading (launch a thread)
+  - Raw Input (support for multiple keyboards)
+  - Sleep/timeBeginPeriod
+  - ClipCursor() (for multi-monitor support)
+  - Fullscreen support
+  - QueryCancelAutoplay
+  - WM_SETCURSOR (control cursor visibility)
+  - WM_ACTIVATEAPP (for when we are not the active application)
+  - Blit speed improvements (BitBlt)
+  - Hardware acceleration (OpenGL or Direct3D or both??)
+  - GetKeyboardLayout (for French keyboards, international WASD support)
+*/
+
 #import "Basic";
 #import "Gamepad";
 #if CPU == .X64 {
@@ -27,6 +46,7 @@
 
 #load "windows.jai"; // Patching Windows module in Jai
 #load "dsound.jai";  // Patching Sound_Player module in Jai
+#load "handmade.jai";
 
 /*
 Handmade Hero Structs
@@ -79,28 +99,8 @@ WINDOW_NAME :: "Handmade Hero";
 
 
 /*
-Handmade Hero System-Related Procedures
+Handmade Hero Win32 System-Related Procedures
 */
-render_weird_gradient :: (buffer: *Win32OffscreenBuffer, x_offset: s32, y_offset: s32) {
-    row := cast(*u8) buffer.memory;
-
-    for y: 0..buffer.height-1 {
-        pixel := cast(*u32) row;
-        for x: 0..buffer.width-1 {
-            // Memory:   	BB GG RR XX
-            // Register: 0x XX RR GG BB
-            red   :   u8 = 0;
-            green :   u8 = cast,no_check(u8) (y + y_offset); // need cast,no_check(u8) instead of xx
-            blue  :   u8 = cast,no_check(u8) (x + x_offset);
-
-            pixel.* = (cast(u32)red) << 16 | (cast(u32)green) << 8 | cast(u32)blue;
-            pixel += 1;
-        }
-        row += buffer.pitch;
-    }
-}
-
-
 win32_get_window_dimension :: (window: HWND) -> Win32WindowDimension {
     result: Win32WindowDimension;
 
@@ -376,8 +376,8 @@ main :: () {
             // NOTE(nahua): Since we specified CS_OWNDC, we can just get one
             // device context and use it forever because we're not sharing it.
             device_context := GetDC(window);
-            x_offset: s32 = 0;
-            y_offset: s32 = 0;
+            x_offset: s32 = 0; // TODO(nahua): Can be removed?
+            y_offset: s32 = 0; // TODO(nahua): Can be removed?
 
             // NOTE(nahua): Sound test
             sound_output: Win32SoundOutput;
@@ -443,8 +443,13 @@ main :: () {
                 vibration.wRightMotorSpeed = 60000; // u16
                 XInputSetState(0, *vibration);
 
-                render_weird_gradient(*global_back_buffer, x_offset, y_offset);
-                defer x_offset += 1;
+                buffer: GameOffscreenBuffer;
+                buffer.memory = global_back_buffer.memory;
+                buffer.width  = global_back_buffer.width;
+                buffer.height = global_back_buffer.height;
+                buffer.pitch  = global_back_buffer.pitch;
+                game_update_and_render(*buffer);
+                defer x_offset += 1; // TODO(nahua): Can be removed?
 
                 // NOTE(nahua): DirectSound output test
                 play_cursor  :s32;
@@ -486,10 +491,10 @@ main :: () {
                 fps := (cast(float32) perf_count_frequency / cast(float32) counter_elapsed);
                 mega_cycles_per_frame := cast(float32) cycles_elapsed / (1000 * 1000);
 
-                print("ms/frame: %ms\t%FPS\t%Mc/f\n",
-                      formatFloat(ms_per_frame, trailing_width = 2),
-                      formatFloat(fps, trailing_width = 2),
-                      formatFloat(mega_cycles_per_frame, trailing_width = 2));
+                // print("ms/frame: %ms\t%FPS\t%Mc/f\n",
+                //       formatFloat(ms_per_frame, trailing_width = 2),
+                //       formatFloat(fps, trailing_width = 2),
+                //       formatFloat(mega_cycles_per_frame, trailing_width = 2));
 
                 last_counter = end_counter;
                 last_cycle_count = end_cycle_count;
