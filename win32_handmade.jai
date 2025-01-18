@@ -205,8 +205,44 @@ win32_init_dsound :: (window: HWND, samples_per_second: s32, secondary_buffer_si
 }
 
 
-win32_fill_sound_buffer :: (sound_output: *Win32SoundOutput, byte_to_lock: s32, bytes_to_write: s32) {
-    region1, region2:           *void;
+win32_clear_buffer :: (sound_output: *Win32SoundOutput) {
+    region1, region2: *void;
+    region1_size, region2_size: s32;
+
+    hr := global_secondary_buffer.Lock(global_secondary_buffer,
+                                       0,
+                                       sound_output.secondary_buffer_size,
+                                       *region1, *region1_size,
+                                       *region2, *region2_size,
+                                       0);
+    if SUCCEEDED(hr) {
+        region1_sample_count := region1_size / sound_output.bytes_per_sample;
+        dest_sample    := cast(*u8) region1;
+        byte_index: s32 = 0;
+        while byte_index < region1_sample_count {
+            defer byte_index += 1;
+            << dest_sample = 0;
+            dest_sample += 1;
+        }
+
+        region2_sample_count := region2_size / sound_output.bytes_per_sample;
+        dest_sample = cast(*u8) region2;
+        byte_index  = 0;
+        while byte_index < region2_sample_count {
+            defer byte_index += 1;
+            << dest_sample = 0;
+            dest_sample += 1;
+        }
+
+        global_secondary_buffer.Unlock(global_secondary_buffer,
+                                       region1, region1_size,
+                                       region2, region2_size);
+    }
+}
+
+
+win32_fill_sound_buffer :: (sound_output: *Win32SoundOutput, byte_to_lock: s32, bytes_to_write: s32, source_buffer: *GameSoundOutputBuffer) {
+    region1, region2: *void;
     region1_size, region2_size: s32;
 
     hr := global_secondary_buffer.Lock(global_secondary_buffer,
@@ -217,26 +253,24 @@ win32_fill_sound_buffer :: (sound_output: *Win32SoundOutput, byte_to_lock: s32, 
                                        0);
     if SUCCEEDED(hr) {
         // TODO(nahua): Assert that Region1Size/Region2Size are valid
-        sample_out: *s16 = cast(*s16) region1;
-        region1_sample_count: s32 = region1_size / sound_output.bytes_per_sample;
+        region1_sample_count: s32  = region1_size / sound_output.bytes_per_sample;
+        source_sample       : *s16 = source_buffer.samples;
+        dest_sample         : *s16 = cast(*s16) region1;
 
         sample_index: s32 = 0;
         while sample_index < region1_sample_count {
             defer sample_index += 1;
             defer sound_output.running_sample_index += 1;
 
-            sine_value: float32 = sin(sound_output.tsine);
-            sample_value: s16 = cast(s16) (sine_value * cast(float32) sound_output.tone_volume);
-
-            << sample_out = sample_value;
-            sample_out += 1;
-            << sample_out = sample_value;
-            sample_out += 1;
-
-            sound_output.tsine += 2.0 * PI / (cast(float32) sound_output.wave_period);
+            << dest_sample = << source_sample;
+            source_sample += 1;
+            dest_sample   += 1;
+            << dest_sample = << source_sample;
+            source_sample += 1;
+            dest_sample   += 1;
         }
 
-        sample_out = cast(*s16) region2;
+        dest_sample = cast(*s16) region2;
         region2_sample_count: s32 = region2_size / sound_output.bytes_per_sample;
 
         sample_index = 0;
@@ -244,18 +278,17 @@ win32_fill_sound_buffer :: (sound_output: *Win32SoundOutput, byte_to_lock: s32, 
             defer sample_index += 1;
             defer sound_output.running_sample_index += 1;
 
-            sine_value: float32 = sin(sound_output.tsine);
-            sample_value: s16 = cast(s16) (sine_value * cast(float32) sound_output.tone_volume);
-
-            << sample_out = sample_value;
-            sample_out += 1;
-            << sample_out = sample_value;
-            sample_out += 1;
-
-            sound_output.tsine += 2.0 * PI / (cast(float32) sound_output.wave_period);
+            << dest_sample = << source_sample;
+            source_sample += 1;
+            dest_sample   += 1;
+            << dest_sample = << source_sample;
+            source_sample += 1;
+            dest_sample   += 1;
         }
 
-        global_secondary_buffer.Unlock(global_secondary_buffer, region1, region1_size, region2, region2_size);
+        global_secondary_buffer.Unlock(global_secondary_buffer,
+                                       region1, region1_size,
+                                       region2, region2_size);
     }
     // else {
     //     print("global_secondary_buffer.Lock failed: %, %, %. hr: %\n", global_secondary_buffer, byte_to_lock, bytes_to_write, hr);
@@ -390,8 +423,9 @@ main :: () {
             sound_output.tone_volume           = 3000;
             sound_output.latency_sample_count  = sound_output.samples_per_second / 15;
             win32_init_dsound(window, sound_output.samples_per_second, sound_output.secondary_buffer_size);
-            win32_fill_sound_buffer(*sound_output, 0, sound_output.latency_sample_count * sound_output.bytes_per_sample);
+            win32_clear_buffer(*sound_output);
             global_secondary_buffer.Play(global_secondary_buffer, 0, 0, DSBPLAY_LOOPING);
+            samples := cast(*s16) VirtualAlloc(null, xx sound_output.secondary_buffer_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
 
             global_running = true;
             last_counter: s64;
@@ -443,36 +477,50 @@ main :: () {
                 vibration.wRightMotorSpeed = 60000; // u16
                 XInputSetState(0, *vibration);
 
+                // Buffer
                 buffer: GameOffscreenBuffer;
                 buffer.memory = global_back_buffer.memory;
                 buffer.width  = global_back_buffer.width;
                 buffer.height = global_back_buffer.height;
                 buffer.pitch  = global_back_buffer.pitch;
-                game_update_and_render(*buffer);
-                defer x_offset += 1; // TODO(nahua): Can be removed?
 
-                // NOTE(nahua): DirectSound output test
-                play_cursor  :s32;
-                write_cursor :s32;
+                // Sound Buffer
+                byte_to_lock   : s32;
+                bytes_to_write : s32;
+                play_cursor    : s32;
+                target_cursor  : s32;
+                write_cursor   : s32;
+                sound_is_valid : bool;
                 hr := global_secondary_buffer.GetCurrentPosition(global_secondary_buffer, *play_cursor, *write_cursor);
                 if SUCCEEDED(hr) {
-                    byte_to_lock: s32 = ((cast(s32) sound_output.running_sample_index) * sound_output.bytes_per_sample) % sound_output.secondary_buffer_size;
-                    target_cursor: s32 = (play_cursor + (sound_output.latency_sample_count * sound_output.bytes_per_sample)) % sound_output.secondary_buffer_size;
-                    bytes_to_write: s32;
+                    byte_to_lock  = ((cast(s32) sound_output.running_sample_index) * sound_output.bytes_per_sample) % sound_output.secondary_buffer_size;
+                    target_cursor = (play_cursor + (sound_output.latency_sample_count * sound_output.bytes_per_sample)) % sound_output.secondary_buffer_size;
 
                     if byte_to_lock > target_cursor {
                         // Play cursor is behind
                         bytes_to_write = sound_output.secondary_buffer_size - byte_to_lock; // region 1
-                        bytes_to_write += target_cursor;                                      // region 2
+                        bytes_to_write += target_cursor;                                    // region 2
                     } else {
                         // Play cursor is in front
-                        bytes_to_write = target_cursor - byte_to_lock;                        // region 1
+                        bytes_to_write = target_cursor - byte_to_lock;                      // region 1
                     }
-                    win32_fill_sound_buffer(*sound_output, byte_to_lock, bytes_to_write);
-                } else {
-                    print("global_secondary_buffer.GetCurrentPosition call failed!\n");
-                    // print("performing exit(1)\n");
-                    // exit(1);
+
+                    sound_is_valid = true;
+                }
+
+                sound_buffer: GameSoundOutputBuffer;
+                sound_buffer.samples_per_second = sound_output.samples_per_second;
+                sound_buffer.sample_count = bytes_to_write / sound_output.bytes_per_sample;
+                sound_buffer.samples = samples;
+
+                game_update_and_render(buffer=*buffer,
+                                       x_offset=0, y_offset=0,
+                                       sound_buffer=*sound_buffer,
+                                       tone_hz=sound_output.tone_hz);
+                defer x_offset += 1; // TODO(nahua): Can be removed?
+
+                if sound_is_valid {
+                    win32_fill_sound_buffer(*sound_output, byte_to_lock, bytes_to_write, *sound_buffer);
                 }
 
                 dimension := win32_get_window_dimension(window);
