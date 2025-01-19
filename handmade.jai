@@ -1,15 +1,51 @@
 GameOffscreenBuffer :: struct {
-    memory          : *void;
-    width           : s32;
-    height          : s32;
-    pitch           : s32;
+    memory: *void;
+    width:  s32;
+    height: s32;
+    pitch:  s32;
 }
 
 
-GameSoundOutputBuffer  :: struct {
-    samples_per_second : s32;
-    sample_count       : s32;
-    samples            : *s16;
+GameSoundOutputBuffer :: struct {
+    samples_per_second: s32;
+    sample_count:       s32;
+    samples:            *s16;
+}
+
+
+GameButtonState :: struct {
+    half_transition_count: s32;
+    ended_down:            bool;
+}
+
+
+GameControllerInput :: struct {
+    is_analog: bool;
+    start_x:   float32;
+    start_y:   float32;
+    min_x:     float32;
+    min_y:     float32;
+    max_x:     float32;
+    max_y:     float32;
+    end_x:     float32;
+    end_y:     float32;
+
+    union {
+        buttons: [6]GameButtonState;
+        struct {
+            up:             GameButtonState;
+            down:           GameButtonState;
+            left:           GameButtonState;
+            right:          GameButtonState;
+            left_shoudler:  GameButtonState;
+            right_shoulder: GameButtonState;
+        }
+    }
+}
+
+
+GameInput :: struct {
+    controllers: [4]GameControllerInput;
 }
 
 
@@ -36,12 +72,23 @@ game_output_sound :: (sound_buffer: *GameSoundOutputBuffer, tone_hz: s32) {
 }
 
 
-game_update_and_render :: (buffer: *GameOffscreenBuffer,
-                           x_offset: s32,
-                           y_offset: s32,
-                           sound_buffer: *GameSoundOutputBuffer,
-                           tone_hz: s32) {
-    // TODO(nahua): Allow sample offsets here for more robust platform options
+game_update_and_render :: (buffer: *GameOffscreenBuffer, sound_buffer: *GameSoundOutputBuffer, input: *GameInput) {
+    x_offset: s32 = 0;
+    y_offset: s32 = 0;
+    tone_hz:  s32 = 256;
+
+    input0: GameControllerInput = *input.controllers[0];
+    if input0.is_analog {
+        x_offset += cast(s32) (4.0 * (cast(float32) input0.end_x));
+        tone_hz = 256 + cast(s32) (128.0 * cast(float32) input0.end_y);
+    } else {
+        // NOTE(nahua): Use digital movement tuning
+    }
+
+    if input0.down.ended_down {
+        y_offset += 1;
+    }
+
     game_output_sound(sound_buffer, tone_hz);
     render_weird_gradient(buffer, x_offset, y_offset);
 }
