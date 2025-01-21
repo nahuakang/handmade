@@ -48,6 +48,7 @@
 #load "dsound.jai";  // Patching Sound_Player module in Jai
 #load "handmade.jai";
 
+
 /*
 Handmade Hero Structs
 */
@@ -237,7 +238,10 @@ win32_clear_buffer :: (sound_output: *Win32SoundOutput) {
 }
 
 
-win32_fill_sound_buffer :: (sound_output: *Win32SoundOutput, byte_to_lock: s32, bytes_to_write: s32, source_buffer: *GameSoundOutputBuffer) {
+win32_fill_sound_buffer :: (sound_output: *Win32SoundOutput,
+                            byte_to_lock: s32,
+                            bytes_to_write: s32,
+                            source_buffer: *GameSoundOutputBuffer) {
     region1, region2: *void;
     region1_size, region2_size: s32;
 
@@ -289,7 +293,10 @@ win32_fill_sound_buffer :: (sound_output: *Win32SoundOutput, byte_to_lock: s32, 
 }
 
 
-win32_process_xinput_digital_button :: (xinput_button_state: s32, old_state: *GameButtonState, button_bit: s32, new_state: *GameButtonState) {
+win32_process_xinput_digital_button :: (xinput_button_state: s32,
+                                        old_state: *GameButtonState,
+                                        button_bit: s32,
+                                        new_state: *GameButtonState) {
     new_state.ended_down = ((xinput_button_state & button_bit) == button_bit);
     new_state.half_transition_count = cast(s32) ifx (old_state.ended_down != new_state.ended_down) then 1 else 0;
 }
@@ -419,6 +426,18 @@ main :: () {
             global_secondary_buffer.Play(global_secondary_buffer, 0, 0, DSBPLAY_LOOPING);
             samples := cast(*s16) VirtualAlloc(null, xx sound_output.secondary_buffer_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
 
+            #if HANDMADE_INTERNAL == 1 {
+                BASE_ADDRESS: *void = cast(*void) Terabytes(cast(u64) 2);
+            } else {
+                BASE_ADDRESS: *void = cast(*void) 0;
+            }
+            game_memory: GameMemory;
+            game_memory.permanent_storage_size = Megabytes(cast(u64) 64);
+            game_memory.transient_storage_size = Gigabytes(cast(u64) 2);
+            total_storage_size: u64            = game_memory.permanent_storage_size + game_memory.transient_storage_size;
+            game_memory.permanent_storage      = VirtualAlloc(BASE_ADDRESS, xx total_storage_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+            game_memory.transient_storage      = cast(*void) (cast(u64) game_memory.permanent_storage) + game_memory.permanent_storage_size;
+
             input: [2]GameInput;
             old_input: *GameInput = *input[0];
             new_input: *GameInput = *input[1];
@@ -426,159 +445,167 @@ main :: () {
             last_counter: s64;
             QueryPerformanceCounter(*last_counter);
             last_cycle_count: u64 = rdtsc();
-            while global_running {
-                input: GameInput;
-                message: MSG;
 
-                if PeekMessageA(*message, null, 0, 0, PM_REMOVE) != 0 {
-                    if message.message == WM_QUIT global_running = false;
-                        TranslateMessage(*message);
-                        DispatchMessageA(*message);
-                }
+            if samples && game_memory.permanent_storage && game_memory.transient_storage {
+                while global_running {
+                    input: GameInput;
+                    message: MSG;
 
-                max_controller_count := XUSER_MAX_COUNT;
-                if max_controller_count > new_input.controllers.count {
-                    max_controller_count = new_input.controllers.count;
-                }
-
-                for controller_index: 0..max_controller_count-1 {
-                    old_controller: *GameControllerInput = *old_input.controllers[controller_index];
-                    new_controller: *GameControllerInput = *new_input.controllers[controller_index];
-
-                    state: XINPUT_STATE;
-                    result := XInputGetState(0, *state);
-                    if result == ERROR_SUCCESS {
-                        // NOTE(nahua): This controller is plugged in and available
-                        buttons        := state.Gamepad.wButtons;
-                        up             := (buttons & XINPUT_GAMEPAD_DPAD_UP)             != 0;
-                        down           := (buttons & XINPUT_GAMEPAD_DPAD_DOWN)           != 0;
-                        left           := (buttons & XINPUT_GAMEPAD_DPAD_LEFT)           != 0;
-                        right          := (buttons & XINPUT_GAMEPAD_DPAD_RIGHT)          != 0;
-                        // start          := (buttons & XINPUT_GAMEPAD_START)               != 0;
-                        // back           := (buttons & XINPUT_GAMEPAD_BACK)                != 0;
-                        // left_shoulder  := (buttons & XINPUT_GAMEPAD_LEFT_SHOULDER)       != 0;
-                        // right_shoulder := (buttons & XINPUT_GAMEPAD_RIGHT_SHOULDER)      != 0;
-                        // a              := (buttons & XINPUT_GAMEPAD_A)                   != 0;
-                        // b              := (buttons & XINPUT_GAMEPAD_B)                   != 0;
-                        // x              := (buttons & XINPUT_GAMEPAD_X)                   != 0;
-                        // y              := (buttons & XINPUT_GAMEPAD_Y)                   != 0;
-                        win32_process_xinput_digital_button(buttons, *old_controller.down, XINPUT_GAMEPAD_A, *new_controller.down);
-                        win32_process_xinput_digital_button(buttons, *old_controller.down, XINPUT_GAMEPAD_B, *new_controller.down);
-                        win32_process_xinput_digital_button(buttons, *old_controller.down, XINPUT_GAMEPAD_X, *new_controller.down);
-                        win32_process_xinput_digital_button(buttons, *old_controller.down, XINPUT_GAMEPAD_Y, *new_controller.down);
-                        win32_process_xinput_digital_button(buttons, *old_controller.down, XINPUT_GAMEPAD_LEFT_SHOULDER, *new_controller.down);
-                        win32_process_xinput_digital_button(buttons, *old_controller.down, XINPUT_GAMEPAD_RIGHT_SHOULDER, *new_controller.down);
-
-                        pad            := state.Gamepad;
-                        x: float32;
-                        if pad.sThumbLX < 0 {
-                            x = (cast(float32) pad.sThumbLX) / 32768.0;
-                        } else {
-                            x = (cast(float32) pad.sThumbLX) / 32767.0;
-                        }
-
-                        y: float32;
-                        if pad.sThumbLY < 0 {
-                            y = (cast(float32) pad.sThumbLY / 32768.0);
-                        } else {
-                            y = (cast(float32) pad.sThumbLY / 32767.0);
-                        }
-
-                        new_controller.start_x = old_controller.end_x;
-                        new_controller.start_y = old_controller.end_y;
-
-                        // TODO(nahua): Min/Max macros
-                        new_controller.min_x = x;
-                        new_controller.max_x = x;
-                        new_controller.end_x = x;
-                        new_controller.min_y = y;
-                        new_controller.max_y = y;
-                        new_controller.end_y = y;
-                        new_controller.is_analog = true;
-                    } else {
-						// NOTE(nahua): This controller is not available
-                    }
-                }
-
-                vibration: XINPUT_VIBRATION;
-                vibration.wLeftMotorSpeed  = 60000; // u16
-                vibration.wRightMotorSpeed = 60000; // u16
-                XInputSetState(0, *vibration);
-
-                // Buffer
-                buffer: GameOffscreenBuffer;
-                buffer.memory = global_back_buffer.memory;
-                buffer.width  = global_back_buffer.width;
-                buffer.height = global_back_buffer.height;
-                buffer.pitch  = global_back_buffer.pitch;
-
-                // Sound Buffer
-                byte_to_lock   : s32;
-                bytes_to_write : s32;
-                play_cursor    : s32;
-                target_cursor  : s32;
-                write_cursor   : s32;
-                sound_is_valid : bool;
-                hr := global_secondary_buffer.GetCurrentPosition(global_secondary_buffer, *play_cursor, *write_cursor);
-                if SUCCEEDED(hr) {
-                    byte_to_lock  = ((cast(s32) sound_output.running_sample_index) * sound_output.bytes_per_sample) % sound_output.secondary_buffer_size;
-                    target_cursor = (play_cursor + (sound_output.latency_sample_count * sound_output.bytes_per_sample)) % sound_output.secondary_buffer_size;
-
-                    if byte_to_lock > target_cursor {
-                        // Play cursor is behind
-                        bytes_to_write = sound_output.secondary_buffer_size - byte_to_lock; // region 1
-                        bytes_to_write += target_cursor;                                    // region 2
-                    } else {
-                        // Play cursor is in front
-                        bytes_to_write = target_cursor - byte_to_lock;                      // region 1
+                    if PeekMessageA(*message, null, 0, 0, PM_REMOVE) != 0 {
+                        if message.message == WM_QUIT global_running = false;
+                            TranslateMessage(*message);
+                            DispatchMessageA(*message);
                     }
 
-                    sound_is_valid = true;
+                    max_controller_count := XUSER_MAX_COUNT;
+                    if max_controller_count > new_input.controllers.count {
+                        max_controller_count = new_input.controllers.count;
+                    }
+
+                    for controller_index: 0..max_controller_count-1 {
+                        old_controller: *GameControllerInput = *old_input.controllers[controller_index];
+                        new_controller: *GameControllerInput = *new_input.controllers[controller_index];
+
+                        state: XINPUT_STATE;
+                        result := XInputGetState(0, *state);
+                        if result == ERROR_SUCCESS {
+                            // NOTE(nahua): This controller is plugged in and available
+                            buttons        := state.Gamepad.wButtons;
+                            up             := (buttons & XINPUT_GAMEPAD_DPAD_UP)             != 0;
+                            down           := (buttons & XINPUT_GAMEPAD_DPAD_DOWN)           != 0;
+                            left           := (buttons & XINPUT_GAMEPAD_DPAD_LEFT)           != 0;
+                            right          := (buttons & XINPUT_GAMEPAD_DPAD_RIGHT)          != 0;
+                            // start          := (buttons & XINPUT_GAMEPAD_START)               != 0;
+                            // back           := (buttons & XINPUT_GAMEPAD_BACK)                != 0;
+                            // left_shoulder  := (buttons & XINPUT_GAMEPAD_LEFT_SHOULDER)       != 0;
+                            // right_shoulder := (buttons & XINPUT_GAMEPAD_RIGHT_SHOULDER)      != 0;
+                            // a              := (buttons & XINPUT_GAMEPAD_A)                   != 0;
+                            // b              := (buttons & XINPUT_GAMEPAD_B)                   != 0;
+                            // x              := (buttons & XINPUT_GAMEPAD_X)                   != 0;
+                            // y              := (buttons & XINPUT_GAMEPAD_Y)                   != 0;
+                            win32_process_xinput_digital_button(buttons, *old_controller.down, XINPUT_GAMEPAD_A, *new_controller.down);
+                            win32_process_xinput_digital_button(buttons, *old_controller.down, XINPUT_GAMEPAD_B, *new_controller.down);
+                            win32_process_xinput_digital_button(buttons, *old_controller.down, XINPUT_GAMEPAD_X, *new_controller.down);
+                            win32_process_xinput_digital_button(buttons, *old_controller.down, XINPUT_GAMEPAD_Y, *new_controller.down);
+                            win32_process_xinput_digital_button(buttons, *old_controller.down, XINPUT_GAMEPAD_LEFT_SHOULDER, *new_controller.down);
+                            win32_process_xinput_digital_button(buttons, *old_controller.down, XINPUT_GAMEPAD_RIGHT_SHOULDER, *new_controller.down);
+
+                            pad            := state.Gamepad;
+                            x: float32;
+                            if pad.sThumbLX < 0 {
+                                x = (cast(float32) pad.sThumbLX) / 32768.0;
+                            } else {
+                                x = (cast(float32) pad.sThumbLX) / 32767.0;
+                            }
+
+                            y: float32;
+                            if pad.sThumbLY < 0 {
+                                y = (cast(float32) pad.sThumbLY / 32768.0);
+                            } else {
+                                y = (cast(float32) pad.sThumbLY / 32767.0);
+                            }
+
+                            new_controller.start_x = old_controller.end_x;
+                            new_controller.start_y = old_controller.end_y;
+
+                            // TODO(nahua): Min/Max macros
+                            new_controller.min_x = x;
+                            new_controller.max_x = x;
+                            new_controller.end_x = x;
+                            new_controller.min_y = y;
+                            new_controller.max_y = y;
+                            new_controller.end_y = y;
+                            new_controller.is_analog = true;
+                        } else {
+    						// NOTE(nahua): This controller is not available
+                        }
+                    }
+
+                    vibration: XINPUT_VIBRATION;
+                    vibration.wLeftMotorSpeed  = 60000; // u16
+                    vibration.wRightMotorSpeed = 60000; // u16
+                    XInputSetState(0, *vibration);
+
+                    // Buffer
+                    buffer: GameOffscreenBuffer;
+                    buffer.memory = global_back_buffer.memory;
+                    buffer.width  = global_back_buffer.width;
+                    buffer.height = global_back_buffer.height;
+                    buffer.pitch  = global_back_buffer.pitch;
+
+                    // Sound Buffer
+                    byte_to_lock   : s32;
+                    bytes_to_write : s32;
+                    play_cursor    : s32;
+                    target_cursor  : s32;
+                    write_cursor   : s32;
+                    sound_is_valid : bool;
+                    hr := global_secondary_buffer.GetCurrentPosition(global_secondary_buffer, *play_cursor, *write_cursor);
+                    if SUCCEEDED(hr) {
+                        byte_to_lock  = ((cast(s32) sound_output.running_sample_index) * sound_output.bytes_per_sample) % sound_output.secondary_buffer_size;
+                        target_cursor = (play_cursor + (sound_output.latency_sample_count * sound_output.bytes_per_sample)) % sound_output.secondary_buffer_size;
+
+                        if byte_to_lock > target_cursor {
+                            // Play cursor is behind
+                            bytes_to_write = sound_output.secondary_buffer_size - byte_to_lock; // region 1
+                            bytes_to_write += target_cursor;                                    // region 2
+                        } else {
+                            // Play cursor is in front
+                            bytes_to_write = target_cursor - byte_to_lock;                      // region 1
+                        }
+
+                        sound_is_valid = true;
+                    }
+
+                    sound_buffer: GameSoundOutputBuffer;
+                    sound_buffer.samples_per_second = sound_output.samples_per_second;
+                    sound_buffer.sample_count = bytes_to_write / sound_output.bytes_per_sample;
+                    sound_buffer.samples = samples;
+
+                    game_update_and_render(memory=*game_memory, input=*input, buffer=*buffer, sound_buffer=*sound_buffer);
+
+                    if sound_is_valid {
+                        win32_fill_sound_buffer(*sound_output, byte_to_lock, bytes_to_write, *sound_buffer);
+                    }
+
+                    dimension := win32_get_window_dimension(window);
+                    win32_display_buffer_window(device_context,
+                                                dimension.width,
+                                                dimension.height,
+                                                *global_back_buffer);
+
+                    end_counter: s64;
+                    QueryPerformanceCounter(*end_counter);
+                    end_cycle_count: u64 = rdtsc();
+                    counter_elapsed := end_counter - last_counter;
+                    cycles_elapsed: u64 = end_cycle_count - last_cycle_count;
+
+                    ms_per_frame := cast(float32) ((1000 * cast(float32) counter_elapsed) / cast(float32) perf_count_frequency);
+                    fps := (cast(float32) perf_count_frequency / cast(float32) counter_elapsed);
+                    mega_cycles_per_frame := cast(float32) cycles_elapsed / (1000 * 1000);
+
+                    // print("ms/frame: %ms\t%FPS\t%Mc/f\n",
+                    //       formatFloat(ms_per_frame, trailing_width = 2),
+                    //       formatFloat(fps, trailing_width = 2),
+                    //       formatFloat(mega_cycles_per_frame, trailing_width = 2));
+
+                    last_counter = end_counter;
+                    last_cycle_count = end_cycle_count;
+
+                    temp_input: *GameInput = new_input;
+                    new_input = old_input;
+                    old_input = temp_input;
                 }
-
-                sound_buffer: GameSoundOutputBuffer;
-                sound_buffer.samples_per_second = sound_output.samples_per_second;
-                sound_buffer.sample_count = bytes_to_write / sound_output.bytes_per_sample;
-                sound_buffer.samples = samples;
-
-                game_update_and_render(buffer=*buffer, sound_buffer=*sound_buffer, input=*input);
-
-                if sound_is_valid {
-                    win32_fill_sound_buffer(*sound_output, byte_to_lock, bytes_to_write, *sound_buffer);
-                }
-
-                dimension := win32_get_window_dimension(window);
-                win32_display_buffer_window(device_context,
-                                            dimension.width,
-                                            dimension.height,
-                                            *global_back_buffer);
-
-                end_counter: s64;
-                QueryPerformanceCounter(*end_counter);
-                end_cycle_count: u64 = rdtsc();
-                counter_elapsed := end_counter - last_counter;
-                cycles_elapsed: u64 = end_cycle_count - last_cycle_count;
-
-                ms_per_frame := cast(float32) ((1000 * cast(float32) counter_elapsed) / cast(float32) perf_count_frequency);
-                fps := (cast(float32) perf_count_frequency / cast(float32) counter_elapsed);
-                mega_cycles_per_frame := cast(float32) cycles_elapsed / (1000 * 1000);
-
-                // print("ms/frame: %ms\t%FPS\t%Mc/f\n",
-                //       formatFloat(ms_per_frame, trailing_width = 2),
-                //       formatFloat(fps, trailing_width = 2),
-                //       formatFloat(mega_cycles_per_frame, trailing_width = 2));
-
-                last_counter = end_counter;
-                last_cycle_count = end_cycle_count;
-
-                temp_input: *GameInput = new_input;
-                new_input = old_input;
-                old_input = temp_input;
+            } else {
+                // Memory allocation failed
+                // TODO(nahua): Logging
             }
         } else {
+            // Window Creation failed
             // TODO(nahua): Logging
         }
     } else {
+        // Window Class Registration failed
         // TODO(nahua): Logging
     }
 }

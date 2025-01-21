@@ -1,3 +1,9 @@
+Kilobytes :: (value: $T) -> T { return value * cast(T) 1024; }
+Megabytes :: (value: $T) -> T { return Kilobytes(value) * cast(T) 1024; }
+Gigabytes :: (value: $T) -> T { return Megabytes(value) * cast(T) 1024; }
+Terabytes :: (value: $T) -> T { return Gigabytes(value) * cast(T) 1024; }
+
+
 GameOffscreenBuffer :: struct {
     memory: *void;
     width:  s32;
@@ -48,6 +54,21 @@ GameInput :: struct {
     controllers: [4]GameControllerInput;
 }
 
+GameMemory :: struct {
+    permanent_storage_size: u64;
+    permanent_storage:      *void;
+    transient_storage_size: u64;
+    transient_storage:      *void;
+    is_initialized:          bool;
+}
+
+
+GameState :: struct {
+    tone_hz:  s32;
+    x_offset: s32;
+    y_offset: s32;
+}
+
 
 game_output_sound :: (sound_buffer: *GameSoundOutputBuffer, tone_hz: s32) {
     sample_out: *s16 = sound_buffer.samples;
@@ -72,25 +93,34 @@ game_output_sound :: (sound_buffer: *GameSoundOutputBuffer, tone_hz: s32) {
 }
 
 
-game_update_and_render :: (buffer: *GameOffscreenBuffer, sound_buffer: *GameSoundOutputBuffer, input: *GameInput) {
-    x_offset: s32 = 0;
-    y_offset: s32 = 0;
-    tone_hz:  s32 = 256;
+game_update_and_render :: (memory: *GameMemory,
+                           input: *GameInput,
+                           buffer: *GameOffscreenBuffer,
+                           sound_buffer: *GameSoundOutputBuffer) {
+    assert(size_of(GameState) <= memory.permanent_storage_size);
+    game_state: *GameState = cast(*GameState) memory.permanent_storage;
+
+    if !memory.is_initialized {
+        game_state.x_offset      = 0;
+        game_state.y_offset      = 0;
+        game_state.tone_hz       = 256;
+        memory.is_initialized    = true;
+    }
 
     input0: GameControllerInput = *input.controllers[0];
     if input0.is_analog {
-        x_offset += cast(s32) (4.0 * (cast(float32) input0.end_x));
-        tone_hz = 256 + cast(s32) (128.0 * cast(float32) input0.end_y);
+        game_state.x_offset += cast(s32) (4.0 * (cast(float32) input0.end_x));
+        game_state.tone_hz   = 256 + cast(s32) (128.0 * cast(float32) input0.end_y);
     } else {
         // NOTE(nahua): Use digital movement tuning
     }
 
     if input0.down.ended_down {
-        y_offset += 1;
+        game_state.y_offset += 1;
     }
 
-    game_output_sound(sound_buffer, tone_hz);
-    render_weird_gradient(buffer, x_offset, y_offset);
+    game_output_sound(sound_buffer, game_state.tone_hz);
+    render_weird_gradient(buffer, game_state.x_offset, game_state.y_offset);
 }
 
 
