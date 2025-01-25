@@ -1,8 +1,25 @@
+#import "Basic";
+#import "File";
+
+
 Kilobytes :: (value: $T) -> T { return value * cast(T) 1024; }
 Megabytes :: (value: $T) -> T { return Kilobytes(value) * cast(T) 1024; }
 Gigabytes :: (value: $T) -> T { return Megabytes(value) * cast(T) 1024; }
 Terabytes :: (value: $T) -> T { return Gigabytes(value) * cast(T) 1024; }
 
+
+/*
+DEBUG
+*/
+DebugReadFileResult :: struct {
+    contents_size: u32;
+    contents:      *void;
+}
+
+
+/*
+Game Structs
+*/
 
 GameOffscreenBuffer :: struct {
     memory: *void;
@@ -97,6 +114,14 @@ game_update_and_render :: (memory: *GameMemory,
                            input: *GameInput,
                            buffer: *GameOffscreenBuffer,
                            sound_buffer: *GameSoundOutputBuffer) {
+    #if HANDMADE_INTERNAL == 1 {
+        file_data := debug_platform_read_entire_file("src/handmade.jai");
+        if file_data.contents {
+            debug_platform_write_entire_file("test.out", file_data.contents_size, file_data.contents);
+            debug_platform_free_file_memory(file_data.contents);
+        }
+    }
+
     assert(size_of(GameState) <= memory.permanent_storage_size);
     game_state: *GameState = cast(*GameState) memory.permanent_storage;
 

@@ -96,6 +96,83 @@ WINDOW_NAME :: "Handmade Hero";
 
 
 /*
+File I/O DEBUG for Win32
+*/
+#if HANDMADE_INTERNAL == 1 {
+    debug_platform_free_file_memory :: (memory: *void) {
+        if memory {
+            VirtualFree(memory, 0, MEM_RELEASE);
+        }
+    }
+
+
+    debug_platform_read_entire_file :: (filename: string) -> DebugReadFileResult {
+        result: DebugReadFileResult;
+        handle := CreateFileA(filename.data, GENERIC_READ);
+
+        if handle != INVALID_HANDLE_VALUE {
+            file_size: LARGE_INTEGER;
+            if GetFileSizeEx(handle, *file_size) {
+                result.contents = VirtualAlloc(null, xx file_size.QuadPart, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+                if result.contents {
+                    bytes_read: DWORD; // u32
+                    read_success := ReadFile(handle, result.contents, xx file_size.QuadPart, *bytes_read);
+                    if read_success && file_size.QuadPart == cast(s64) bytes_read {
+                        // NOTE(nahua): File read successfully
+                        result.contents_size = bytes_read;
+                    } else {
+                        // ERROR: Read failed
+                        debug_platform_free_file_memory(result.contents);
+                        result.contents = null;
+                        // TODO(nahua): Logging
+                    }
+                } else {
+                    // ERROR: Memory allocation failed
+                    // TODO(nahua): Logging
+                }
+            } else {
+                // ERROR: File size evaluation failed
+                // TODO(nahua): Logging
+            }
+            CloseHandle(handle);
+        } else {
+            // ERROR: Handle creation failed
+            // TODO(nahua): Logging
+        }
+
+        return result;
+    }
+
+
+    debug_platform_write_entire_file :: (filename: string, memory_size: u32, memory: *void) -> bool {
+        result: bool;
+        handle := CreateFileA(filename=filename.data,
+                              desired_access=GENERIC_WRITE,
+                              share_mode=0x0,
+                              creation=CREATE_ALWAYS);
+
+        if handle != INVALID_HANDLE_VALUE {
+            bytes_written: DWORD; // u32
+            read_success := WriteFile(handle, memory, memory_size, *bytes_written, null);
+            if read_success {
+                // NOTE(nahua): File written successfully
+                result = (bytes_written == memory_size);
+            } else {
+                // ERROR: Write failed
+                // TODO(nahua): Logging
+            }
+            CloseHandle(handle);
+        } else {
+            // ERROR: Handle creation failed
+            // TODO(nahua): Logging
+        }
+
+        return result;
+    }
+}
+
+
+/*
 Handmade Hero Win32 System-Related Procedures
 */
 win32_get_window_dimension :: (window: HWND) -> Win32WindowDimension {

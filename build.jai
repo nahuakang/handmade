@@ -29,7 +29,7 @@ build :: () {
 
     set_build_options(options, w);
     compiler_begin_intercept(w);
-    add_build_file("win32_handmade.jai", w);
+    add_build_file("src/win32_handmade.jai", w);
     if internal_build {
         add_build_string("HANDMADE_INTERNAL :: 1;", w);
     } else {
