@@ -1,5 +1,11 @@
 /*
-  NOTE(nahua):
+  NOTE(nahua): This is the build file for Handmade Hero in Jai.
+  Compile the program using:
+  jai build - --<flag>
+
+  Build flags include the following:
+
+  HANDMADE_WIN32: TODO(nahua): Only exists in the original build.bat.
 
   HANDMADE_INTERNAL:
     0 - Build for public release

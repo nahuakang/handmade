@@ -61,7 +61,6 @@ Win32OffscreenBuffer :: struct {
     width:           s32;
     height:          s32;
     pitch:           s32;
-    bytes_per_pixel: s32;
 }
 
 
@@ -192,10 +191,10 @@ win32_resize_dib_section :: (buffer: *Win32OffscreenBuffer, width: s32, height: 
         VirtualFree(buffer.memory, 0, MEM_RELEASE);
     }
 
+    bytes_per_pixel: WORD = 4; // u32
     buffer.width = width;
     buffer.height = height;
-    buffer.bytes_per_pixel = 4;
-    buffer.pitch = buffer.width * buffer.bytes_per_pixel;
+    buffer.pitch = buffer.width * cast(s32) bytes_per_pixel;
 
     buffer.info.bmiHeader.biSize = size_of(BITMAPINFOHEADER);
     buffer.info.bmiHeader.biWidth = buffer.width;
@@ -204,7 +203,7 @@ win32_resize_dib_section :: (buffer: *Win32OffscreenBuffer, width: s32, height: 
     buffer.info.bmiHeader.biBitCount = 32;
     buffer.info.bmiHeader.biCompression = BI_RGB;
 
-    bitmap_memory_size := buffer.bytes_per_pixel * (buffer.width * buffer.height);
+    bitmap_memory_size := (cast(s32) bytes_per_pixel) * (buffer.width * buffer.height);
     buffer.memory = VirtualAlloc(null, xx bitmap_memory_size, MEM_COMMIT, PAGE_READWRITE);
 }
 
@@ -510,7 +509,7 @@ main :: () {
             }
             game_memory: GameMemory;
             game_memory.permanent_storage_size = Megabytes(cast(u64) 64);
-            game_memory.transient_storage_size = Gigabytes(cast(u64) 2);
+            game_memory.transient_storage_size = Gigabytes(cast(u64) 1);
             total_storage_size: u64            = game_memory.permanent_storage_size + game_memory.transient_storage_size;
             game_memory.permanent_storage      = VirtualAlloc(BASE_ADDRESS, xx total_storage_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
             game_memory.transient_storage      = cast(*void) (cast(u64) game_memory.permanent_storage) + game_memory.permanent_storage_size;
