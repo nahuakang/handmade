@@ -10,6 +10,8 @@ Terabytes :: (value: $T) -> T { return Gigabytes(value) * cast(T) 1024; }
 
 /*
 DEBUG
+
+NOTE(nahua): Used only when HANDMADE_INTERNAL == 1
 */
 DebugReadFileResult :: struct {
     contents_size: u32;
@@ -43,32 +45,41 @@ GameButtonState :: struct {
 
 
 GameControllerInput :: struct {
-    is_analog: bool;
-    start_x:   float32;
-    start_y:   float32;
-    min_x:     float32;
-    min_y:     float32;
-    max_x:     float32;
-    max_y:     float32;
-    end_x:     float32;
-    end_y:     float32;
+    is_analog:    bool;
+    is_connected: bool;
+
+    stick_average_x: float32;
+    stick_average_y: float32;
 
     union {
-        buttons: [6]GameButtonState;
+        buttons: [12]GameButtonState;
         struct {
-            up:             GameButtonState;
-            down:           GameButtonState;
-            left:           GameButtonState;
-            right:          GameButtonState;
-            left_shoudler:  GameButtonState;
+            move_up:        GameButtonState;
+            move_down:      GameButtonState;
+            move_left:      GameButtonState;
+            move_right:     GameButtonState;
+
+            action_up:      GameButtonState;
+            action_down:    GameButtonState;
+            action_left:    GameButtonState;
+            action_right:   GameButtonState;
+
+            left_shoulder:  GameButtonState;
             right_shoulder: GameButtonState;
+            back:           GameButtonState;
+            start:          GameButtonState;
+
+            terminator:     GameButtonState; // NOTE(nahua): for assert purpose only
         }
     }
 }
 
 
 GameInput :: struct {
-    controllers: [4]GameControllerInput;
+    // NOTE(nahua): 1 keyboard + 4 controllers
+    // Keyboard:    Windows API - Controller 0
+    // Gamepad 0-3: XInput API  - Controller 1, 2, 3, 4
+    controllers: [5]GameControllerInput;
 }
 
 GameMemory :: struct {
@@ -84,6 +95,13 @@ GameState :: struct {
     tone_hz:  s32;
     x_offset: s32;
     y_offset: s32;
+}
+
+
+get_controller :: (input: *GameInput, controller_index: s64) -> *GameControllerInput {
+    assert(controller_index < input.controllers.count);
+    result: *GameControllerInput = *input.controllers[controller_index];
+    return result;
 }
 
 
@@ -110,38 +128,44 @@ game_output_sound :: (sound_buffer: *GameSoundOutputBuffer, tone_hz: s32) {
 }
 
 
-game_update_and_render :: (memory: *GameMemory,
-                           input: *GameInput,
-                           buffer: *GameOffscreenBuffer,
-                           sound_buffer: *GameSoundOutputBuffer) {
-    #if HANDMADE_INTERNAL == 1 {
-        file_data := debug_platform_read_entire_file("src/handmade.jai");
-        if file_data.contents {
-            debug_platform_write_entire_file("test.out", file_data.contents_size, file_data.contents);
-            debug_platform_free_file_memory(file_data.contents);
-        }
-    }
-
+game_update_and_render :: (memory: *GameMemory, input: *GameInput, buffer: *GameOffscreenBuffer, sound_buffer: *GameSoundOutputBuffer) {
+    assert(*input.controllers[0].terminator - *input.controllers[0].buttons[0] == input.controllers[0].buttons.count);
     assert(size_of(GameState) <= memory.permanent_storage_size);
+
     game_state: *GameState = cast(*GameState) memory.permanent_storage;
 
     if !memory.is_initialized {
-        game_state.x_offset      = 0;
-        game_state.y_offset      = 0;
+        #if HANDMADE_INTERNAL == 1 {
+            file_data := debug_platform_read_entire_file("src/handmade.jai");
+            if file_data.contents {
+                debug_platform_write_entire_file("test.out", file_data.contents_size, file_data.contents);
+                debug_platform_free_file_memory(file_data.contents);
+            }
+        }
+
         game_state.tone_hz       = 256;
         memory.is_initialized    = true;
     }
 
-    input0: GameControllerInput = *input.controllers[0];
-    if input0.is_analog {
-        game_state.x_offset += cast(s32) (4.0 * (cast(float32) input0.end_x));
-        game_state.tone_hz   = 256 + cast(s32) (128.0 * cast(float32) input0.end_y);
-    } else {
-        // NOTE(nahua): Use digital movement tuning
-    }
+    for controller_index: 0..input.controllers.count-1 {
+        controller: *GameControllerInput = get_controller(input, controller_index);
+        if controller.is_analog {
+            game_state.x_offset += cast(s32) (4.0 * controller.stick_average_x);
+            game_state.tone_hz   = 256 + cast(s32) (128.0 * controller.stick_average_y);
+        } else {
+            // NOTE(nahua): Use digital movement tuning
+            if controller.move_left.ended_down {
+                game_state.x_offset -= 1;
+            }
 
-    if input0.down.ended_down {
-        game_state.y_offset += 1;
+            if controller.move_right.ended_down {
+                game_state.x_offset += 1;
+            }
+        }
+
+        if controller.action_down.ended_down {
+            game_state.y_offset += 1;
+        }
     }
 
     game_output_sound(sound_buffer, game_state.tone_hz);
@@ -157,9 +181,9 @@ render_weird_gradient :: (buffer: *GameOffscreenBuffer, x_offset: s32, y_offset:
         for x: 0..buffer.width-1 {
             // Memory:   	BB GG RR XX
             // Register: 0x XX RR GG BB
-            red   :   u8 = 0;
-            green :   u8 = cast,no_check(u8) (y + y_offset); // need cast,no_check(u8) instead of xx
-            blue  :   u8 = cast,no_check(u8) (x + x_offset);
+            red:   u8 = 0;
+            green: u8 = cast,no_check(u8) (y + y_offset); // need cast,no_check(u8) instead of xx
+            blue:  u8 = cast,no_check(u8) (x + x_offset);
 
             pixel.* = (cast(u32)red) << 16 | (cast(u32)green) << 8 | cast(u32)blue;
             pixel += 1;

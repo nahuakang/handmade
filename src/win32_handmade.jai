@@ -369,12 +369,95 @@ win32_fill_sound_buffer :: (sound_output: *Win32SoundOutput,
 }
 
 
-win32_process_xinput_digital_button :: (xinput_button_state: s32,
-                                        old_state: *GameButtonState,
-                                        button_bit: s32,
-                                        new_state: *GameButtonState) {
+win32_process_xinput_digital_button :: (xinput_button_state: s32, old_state: *GameButtonState, button_bit: s32, new_state: *GameButtonState) {
     new_state.ended_down = ((xinput_button_state & button_bit) == button_bit);
     new_state.half_transition_count = cast(s32) ifx (old_state.ended_down != new_state.ended_down) then 1 else 0;
+}
+
+
+win32_process_xinput_stick_value :: (value: s16, deadzone_threshold: s16) -> float32 {
+    result: float32 = 0;
+    value_f32 := cast(float32) value;
+    deadzone_threshold_f32 := cast(float32) deadzone_threshold;
+
+    if value < -deadzone_threshold {
+        result = (value_f32 + deadzone_threshold_f32) / (32768.0 - deadzone_threshold_f32);
+    } else if value > deadzone_threshold {
+        result = (value_f32 - deadzone_threshold_f32) / (32767.0 - deadzone_threshold_f32);
+    }
+
+    return result;
+}
+
+
+win32_process_keyboard_message :: (new_state: *GameButtonState, is_down: bool) {
+    assert(new_state.ended_down != is_down);
+    new_state.ended_down = is_down;
+    new_state.half_transition_count += 1;
+}
+
+
+win32_process_pending_messages :: (keyboard_controller: *GameControllerInput) {
+    message: MSG;
+    while PeekMessageA(*message, null, 0, 0, PM_REMOVE) {
+        if message.message == {
+            case WM_QUIT;
+                global_running = false;
+            case WM_SYSKEYDOWN; #through;
+            case WM_SYSKEYUP;   #through;
+            case WM_KEYDOWN;    #through;
+            case WM_KEYUP;
+                is_down   := ((message.lParam & (1 << 31)) == 0);
+                was_down  := ((message.lParam & (1 << 30)) != 0);
+                keycode   := message.wParam; // u64
+                if is_down != was_down {
+                    if      keycode == VK_W{
+                        win32_process_keyboard_message(*keyboard_controller.move_up, is_down);
+                    }
+                    else if keycode == VK_A{
+                        win32_process_keyboard_message(*keyboard_controller.move_left, is_down);
+                    }
+                    else if keycode == VK_S{
+                        win32_process_keyboard_message(*keyboard_controller.move_down, is_down);
+                    }
+                    else if keycode == VK_D{
+                        win32_process_keyboard_message(*keyboard_controller.move_right, is_down);
+                    }
+                    else if keycode == VK_Q {
+                        win32_process_keyboard_message(*keyboard_controller.left_shoulder, is_down);
+                    }
+                    else if keycode == VK_E {
+                        win32_process_keyboard_message(*keyboard_controller.right_shoulder, is_down);
+                    }
+                    else if keycode == VK_UP {
+                        win32_process_keyboard_message(*keyboard_controller.action_up, is_down);
+                    }
+                    else if keycode == VK_DOWN {
+                        win32_process_keyboard_message(*keyboard_controller.action_down, is_down);
+                    }
+                    else if keycode == VK_LEFT{
+                        win32_process_keyboard_message(*keyboard_controller.action_left, is_down);
+                    }
+                    else if keycode == VK_RIGHT{
+                        win32_process_keyboard_message(*keyboard_controller.action_right, is_down);
+                    }
+                    else if keycode == VK_ESCAPE {
+                        win32_process_keyboard_message(*keyboard_controller.start, is_down);
+                    }
+                    else if keycode == VK_SPACE {
+                        win32_process_keyboard_message(*keyboard_controller.back, is_down);
+                    }
+
+                    alt_key_was_down := (message.lParam & (1 << 29));
+                    if keycode == VK_F4 && alt_key_was_down {
+                        global_running = false;
+                    }
+                }
+            case;
+                TranslateMessage(*message);
+                DispatchMessageA(*message);
+        }
+    }
 }
 
 
@@ -397,39 +480,7 @@ win32_window_callback :: (window: HWND, message: u32, wParam: WPARAM, lParam: LP
         case WM_SYSKEYUP;   #through;
         case WM_KEYDOWN;    #through;
         case WM_KEYUP;
-            push_context{ print("WM_SYSKEYDOWN|WM_KEYUP|WM_KEYDOWN|WM_KEYUP\n"); }
-            is_down   := ((lParam & (1 << 31)) == 0);
-            was_down  := ((lParam & (1 << 30)) != 0);
-            keycode   := wParam; // u64
-            if is_down != was_down {
-                keystroke: string;
-                if      keycode == VK_W     keystroke = "W";
-                else if keycode == VK_A     keystroke = "A";
-                else if keycode == VK_S     keystroke = "S";
-                else if keycode == VK_D     keystroke = "D";
-                else if keycode == VK_Q     keystroke = "Q";
-                else if keycode == VK_E     keystroke = "E";
-                else if keycode == VK_UP    keystroke = "UP";
-                else if keycode == VK_DOWN  keystroke = "DOWN";
-                else if keycode == VK_LEFT  keystroke = "LEFT";
-                else if keycode == VK_RIGHT keystroke = "RIGHT";
-                else if keycode == VK_ESCAPE {
-                    keystroke = "ESCAPE";
-                    current := "";
-                    previous := "";
-                    if is_down  current = "IsDown";
-                    if was_down previous = "WasDown";
-                    push_context{ keystroke = sprint("%: % %", keystroke, current, previous); }
-                }
-                else if keycode == VK_SPACE keystroke = "SPACE";
-
-                push_context{ print("%\n", keystroke); }
-
-                alt_key_was_down := (lParam & (1 << 29));
-                if keycode == VK_F4 && alt_key_was_down {
-                    global_running = false;
-                }
-            }
+            push_context{ assert(!"Keyboard input came in through a non-dispatch message!!!"); }
         case WM_PAINT;
             paint: PAINTSTRUCT;
             device_context := BeginPaint(window, *paint);
@@ -514,86 +565,91 @@ main :: () {
             game_memory.permanent_storage      = VirtualAlloc(BASE_ADDRESS, xx total_storage_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
             game_memory.transient_storage      = cast(*void) (cast(u64) game_memory.permanent_storage) + game_memory.permanent_storage_size;
 
-            input: [2]GameInput;
-            old_input: *GameInput = *input[0];
-            new_input: *GameInput = *input[1];
-            global_running = true;
-            last_counter: s64;
-            QueryPerformanceCounter(*last_counter);
-            last_cycle_count: u64 = rdtsc();
-
             if samples && game_memory.permanent_storage && game_memory.transient_storage {
+                input: [2]GameInput;
+                old_input: *GameInput = *input[0];
+                new_input: *GameInput = *input[1];
+                global_running = true;
+                last_counter: s64;
+                QueryPerformanceCounter(*last_counter);
+                last_cycle_count: u64 = rdtsc();
+
                 while global_running {
-                    input: GameInput;
-                    message: MSG;
+                    old_keyboard_controller: *GameControllerInput = get_controller(old_input, 0);
+                    new_keyboard_controller: *GameControllerInput = get_controller(new_input, 0);
+                    empty_keyboard_controller: GameControllerInput;
+                    << new_keyboard_controller = empty_keyboard_controller;
+                    new_keyboard_controller.is_connected = true;
 
-                    if PeekMessageA(*message, null, 0, 0, PM_REMOVE) != 0 {
-                        if message.message == WM_QUIT global_running = false;
-                            TranslateMessage(*message);
-                            DispatchMessageA(*message);
+                    for button_index: 0..new_keyboard_controller.buttons.count-1 {
+                        new_keyboard_controller.buttons[button_index].ended_down = old_keyboard_controller.buttons[button_index].ended_down;
                     }
 
+                    win32_process_pending_messages(new_keyboard_controller);
+
+                    // TODO(nahua): Need to not poll disconnected controllers to avoid
+                    // xinput frame rate hit on older libraries...
+                    // TODO(nahua): Should we poll this more frequently
                     max_controller_count := XUSER_MAX_COUNT;
-                    if max_controller_count > new_input.controllers.count {
-                        max_controller_count = new_input.controllers.count;
+                    if max_controller_count > new_input.controllers.count - 1 {
+                        max_controller_count = new_input.controllers.count - 1;
                     }
 
-                    for controller_index: 0..max_controller_count-1 {
-                        old_controller: *GameControllerInput = *old_input.controllers[controller_index];
-                        new_controller: *GameControllerInput = *new_input.controllers[controller_index];
+                    // NOTE(nahua): Iterate over the controllers (index 1 to 4)
+                    for controller_index: 1..max_controller_count-1 {
+                        old_controller: *GameControllerInput = get_controller(old_input, controller_index);
+                        new_controller: *GameControllerInput = get_controller(new_input, controller_index);
 
                         state: XINPUT_STATE;
                         result := XInputGetState(0, *state);
                         if result == ERROR_SUCCESS {
-                            // NOTE(nahua): This controller is plugged in and available
-                            buttons        := state.Gamepad.wButtons;
-                            up             := (buttons & XINPUT_GAMEPAD_DPAD_UP)             != 0;
-                            down           := (buttons & XINPUT_GAMEPAD_DPAD_DOWN)           != 0;
-                            left           := (buttons & XINPUT_GAMEPAD_DPAD_LEFT)           != 0;
-                            right          := (buttons & XINPUT_GAMEPAD_DPAD_RIGHT)          != 0;
-                            // start          := (buttons & XINPUT_GAMEPAD_START)               != 0;
-                            // back           := (buttons & XINPUT_GAMEPAD_BACK)                != 0;
-                            // left_shoulder  := (buttons & XINPUT_GAMEPAD_LEFT_SHOULDER)       != 0;
-                            // right_shoulder := (buttons & XINPUT_GAMEPAD_RIGHT_SHOULDER)      != 0;
-                            // a              := (buttons & XINPUT_GAMEPAD_A)                   != 0;
-                            // b              := (buttons & XINPUT_GAMEPAD_B)                   != 0;
-                            // x              := (buttons & XINPUT_GAMEPAD_X)                   != 0;
-                            // y              := (buttons & XINPUT_GAMEPAD_Y)                   != 0;
-                            win32_process_xinput_digital_button(buttons, *old_controller.down, XINPUT_GAMEPAD_A, *new_controller.down);
-                            win32_process_xinput_digital_button(buttons, *old_controller.down, XINPUT_GAMEPAD_B, *new_controller.down);
-                            win32_process_xinput_digital_button(buttons, *old_controller.down, XINPUT_GAMEPAD_X, *new_controller.down);
-                            win32_process_xinput_digital_button(buttons, *old_controller.down, XINPUT_GAMEPAD_Y, *new_controller.down);
-                            win32_process_xinput_digital_button(buttons, *old_controller.down, XINPUT_GAMEPAD_LEFT_SHOULDER, *new_controller.down);
-                            win32_process_xinput_digital_button(buttons, *old_controller.down, XINPUT_GAMEPAD_RIGHT_SHOULDER, *new_controller.down);
-
-                            pad            := state.Gamepad;
-                            x: float32;
-                            if pad.sThumbLX < 0 {
-                                x = (cast(float32) pad.sThumbLX) / 32768.0;
-                            } else {
-                                x = (cast(float32) pad.sThumbLX) / 32767.0;
-                            }
-
-                            y: float32;
-                            if pad.sThumbLY < 0 {
-                                y = (cast(float32) pad.sThumbLY / 32768.0);
-                            } else {
-                                y = (cast(float32) pad.sThumbLY / 32767.0);
-                            }
-
-                            new_controller.start_x = old_controller.end_x;
-                            new_controller.start_y = old_controller.end_y;
-
-                            // TODO(nahua): Min/Max macros
-                            new_controller.min_x = x;
-                            new_controller.max_x = x;
-                            new_controller.end_x = x;
-                            new_controller.min_y = y;
-                            new_controller.max_y = y;
-                            new_controller.end_y = y;
+                            // NOTE(nahua): This controller is plugged in
+                            new_controller.is_connected = true;
                             new_controller.is_analog = true;
+
+                            pad :=     state.Gamepad;
+                            buttons := state.Gamepad.wButtons;
+
+                            new_controller.stick_average_x = win32_process_xinput_stick_value(pad.sThumbLX, XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE);
+                            new_controller.stick_average_y = win32_process_xinput_stick_value(pad.sThumbLY, XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE);
+
+                            if new_controller.stick_average_x != 0.0 || new_controller.stick_average_y != 0.0 {
+                                new_controller.is_analog = true;
+                            }
+                            if buttons & XINPUT_GAMEPAD_DPAD_UP {
+                                new_controller.stick_average_y = 1.0;
+                                new_controller.is_analog       = false;
+                            }
+                            if buttons & XINPUT_GAMEPAD_DPAD_DOWN {
+                                new_controller.stick_average_y = -1.0;
+                                new_controller.is_analog       = false;
+                            }
+                            if buttons & XINPUT_GAMEPAD_DPAD_LEFT {
+                                new_controller.stick_average_y = -1.0;
+                                new_controller.is_analog       = false;
+                            }
+                            if buttons & XINPUT_GAMEPAD_DPAD_RIGHT {
+                                new_controller.stick_average_y = 1.0;
+                                new_controller.is_analog       = false;
+                            }
+
+                            threshold: float32 = 0.5;
+                            win32_process_xinput_digital_button(cast(s32) ifx new_controller.stick_average_x > threshold 1 else 0,  *old_controller.move_right, 1, *new_controller.move_right);
+                            win32_process_xinput_digital_button(cast(s32) ifx new_controller.stick_average_x < -threshold 1 else 0, *old_controller.move_left,  1, *new_controller.move_left);
+                            win32_process_xinput_digital_button(cast(s32) ifx new_controller.stick_average_y > threshold 1 else 0,  *old_controller.move_up,    1, *new_controller.move_up);
+                            win32_process_xinput_digital_button(cast(s32) ifx new_controller.stick_average_y < -threshold 1 else 0, *old_controller.move_down,  1, *new_controller.move_down);
+
+                            win32_process_xinput_digital_button(buttons, *old_controller.action_down,    XINPUT_GAMEPAD_A,              *new_controller.action_down);
+                            win32_process_xinput_digital_button(buttons, *old_controller.action_right,   XINPUT_GAMEPAD_B,              *new_controller.action_right);
+                            win32_process_xinput_digital_button(buttons, *old_controller.action_left,    XINPUT_GAMEPAD_X,              *new_controller.action_left);
+                            win32_process_xinput_digital_button(buttons, *old_controller.action_up,      XINPUT_GAMEPAD_Y,              *new_controller.action_up);
+                            win32_process_xinput_digital_button(buttons, *old_controller.left_shoulder,  XINPUT_GAMEPAD_LEFT_SHOULDER,  *new_controller.left_shoulder);
+                            win32_process_xinput_digital_button(buttons, *old_controller.right_shoulder, XINPUT_GAMEPAD_RIGHT_SHOULDER, *new_controller.right_shoulder);
+                            win32_process_xinput_digital_button(buttons, *old_controller.start,          XINPUT_GAMEPAD_START,          *new_controller.start);
+                            win32_process_xinput_digital_button(buttons, *old_controller.back,           XINPUT_GAMEPAD_BACK,           *new_controller.back);
                         } else {
     						// NOTE(nahua): This controller is not available
+    						new_controller.is_connected = false;
                         }
                     }
 
@@ -638,7 +694,7 @@ main :: () {
                     sound_buffer.sample_count = bytes_to_write / sound_output.bytes_per_sample;
                     sound_buffer.samples = samples;
 
-                    game_update_and_render(memory=*game_memory, input=*input, buffer=*buffer, sound_buffer=*sound_buffer);
+                    game_update_and_render(memory=*game_memory, input=new_input, buffer=*buffer, sound_buffer=*sound_buffer);
 
                     if sound_is_valid {
                         win32_fill_sound_buffer(*sound_output, byte_to_lock, bytes_to_write, *sound_buffer);
