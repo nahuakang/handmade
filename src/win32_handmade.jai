@@ -85,6 +85,7 @@ Handmade Hero Variables
 global_back_buffer: Win32OffscreenBuffer;
 global_running: bool;
 global_secondary_buffer: *IDirectSoundBuffer8;
+global_perf_count_frequency: s64;
 
 
 /*
@@ -174,6 +175,19 @@ File I/O DEBUG for Win32
 /*
 Handmade Hero Win32 System-Related Procedures
 */
+win32_get_seconds_elapsed :: inline (start: s64, end: s64) -> float32 {
+    result: float32 = (cast(float32) (end - start)) / (cast(float32) global_perf_count_frequency);
+    return result;
+}
+
+
+win32_get_wall_clock :: inline () -> s64 {
+    result: s64;
+    QueryPerformanceCounter(*result);
+    return result;
+}
+
+
 win32_get_window_dimension :: (window: HWND) -> Win32WindowDimension {
     result: Win32WindowDimension;
 
@@ -506,10 +520,17 @@ win32_window_callback :: (window: HWND, message: u32, wParam: WPARAM, lParam: LP
 main corresponds to WinMain.
 */
 main :: () {
-    perf_count_frequency: s64;
-    QueryPerformanceFrequency(*perf_count_frequency);
+    perf_count_frequency_result: s64;
+    QueryPerformanceFrequency(*perf_count_frequency_result);
+    global_perf_count_frequency = perf_count_frequency_result;
+    // NOTE(nahua): Set the Windows scheduler granularity to 1ms
+    // so that our Sleep() can be more granular
+    desired_scheduler_ms: u32 = 1;
+    sleep_is_granular: bool = timeBeginPeriod(desired_scheduler_ms) == TIMERR_NOERROR;
 
     init_gamepad();
+
+    win32_resize_dib_section(*global_back_buffer, 1280, 720);
 
     window_class: WNDCLASSEXW;
     window_class.cbSize = size_of(WNDCLASSEXW);
@@ -520,7 +541,10 @@ main :: () {
     window_class.hInstance = GetModuleHandleW(null);
     window_class.lpszClassName = utf8_to_wide(WINDOW_CLASS_NAME);
 
-    win32_resize_dib_section(*global_back_buffer, 1280, 720);
+    // TODO(nahua): How do we reliably query on this on Windows?
+    monitor_refresh_hz := 60;
+    game_update_hz := monitor_refresh_hz / 2;
+    target_seconds_per_frame: float32 = 1.0 / cast(float32) game_update_hz;
 
     if RegisterClassExW(*window_class) {
         window := CreateWindowExW(0,
@@ -570,8 +594,7 @@ main :: () {
                 old_input: *GameInput = *input[0];
                 new_input: *GameInput = *input[1];
                 global_running = true;
-                last_counter: s64;
-                QueryPerformanceCounter(*last_counter);
+                last_counter: s64 = win32_get_wall_clock();
                 last_cycle_count: u64 = rdtsc();
 
                 while global_running {
@@ -706,27 +729,44 @@ main :: () {
                                                 dimension.height,
                                                 *global_back_buffer);
 
-                    end_counter: s64;
-                    QueryPerformanceCounter(*end_counter);
-                    end_cycle_count: u64 = rdtsc();
-                    counter_elapsed := end_counter - last_counter;
-                    cycles_elapsed: u64 = end_cycle_count - last_cycle_count;
+                    work_counter: s64 = win32_get_wall_clock();
+                    work_seconds_elapsed: float32 = win32_get_seconds_elapsed(last_counter, work_counter);
+                    seconds_elapsed_for_frame: float32 = work_seconds_elapsed;
 
-                    ms_per_frame := cast(float32) ((1000 * cast(float32) counter_elapsed) / cast(float32) perf_count_frequency);
-                    fps := (cast(float32) perf_count_frequency / cast(float32) counter_elapsed);
-                    mega_cycles_per_frame := cast(float32) cycles_elapsed / (1000 * 1000);
-
-                    // print("ms/frame: %ms\t%FPS\t%Mc/f\n",
-                    //       formatFloat(ms_per_frame, trailing_width = 2),
-                    //       formatFloat(fps, trailing_width = 2),
-                    //       formatFloat(mega_cycles_per_frame, trailing_width = 2));
-
-                    last_counter = end_counter;
-                    last_cycle_count = end_cycle_count;
+                    if seconds_elapsed_for_frame < target_seconds_per_frame {
+                        while seconds_elapsed_for_frame < target_seconds_per_frame {
+                            if sleep_is_granular {
+                                sleep_ms: s32 = cast(s32) (1000.0 * (target_seconds_per_frame - seconds_elapsed_for_frame));
+                                if sleep_ms > 0 {
+                                    Sleep(sleep_ms);
+                                }
+                            }
+                            seconds_elapsed_for_frame = win32_get_seconds_elapsed(last_counter, win32_get_wall_clock());
+                        }
+                    } else {
+                        // TODO(nahua): MISSED FRAME RATE!
+                        // TODO(nahua): Logging
+                    }
 
                     temp_input: *GameInput = new_input;
                     new_input = old_input;
                     old_input = temp_input;
+
+                    end_counter: s64 = win32_get_wall_clock();
+                    ms_per_frame: float32 = 1000.0 * win32_get_seconds_elapsed(last_counter, end_counter);
+                    last_counter = end_counter;
+
+                    end_cycle_count: u64 = rdtsc();
+                    cycles_elapsed: u64 = end_cycle_count - last_cycle_count;
+                    last_cycle_count = end_cycle_count;
+
+                    // ms_per_frame := cast(float32) ((1000 * cast(float32) counter_elapsed) / cast(float32) global_perf_count_frequency);
+                    // fps := (cast(float32) global_perf_count_frequency / cast(float32) counter_elapsed);
+                    // mega_cycles_per_frame := cast(float32) cycles_elapsed / (1000 * 1000);
+                    // print("ms/frame: %ms\t%FPS\t%Mc/f\n",
+                    //       formatFloat(ms_per_frame, trailing_width = 2),
+                    //       formatFloat(fps, trailing_width = 2),
+                    //       formatFloat(mega_cycles_per_frame, trailing_width = 2));
                 }
             } else {
                 // Memory allocation failed
