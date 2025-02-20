@@ -13,7 +13,7 @@ DEBUG
 
 NOTE(nahua): Used only when HANDMADE_INTERNAL == 1
 */
-DebugReadFileResult :: struct {
+Debug_Read_File_Result :: struct {
     contents_size: u32;
     contents:      *void;
 }
@@ -23,7 +23,7 @@ DebugReadFileResult :: struct {
 Game Structs
 */
 
-GameOffscreenBuffer :: struct {
+Game_Offscreen_Buffer :: struct {
     memory: *void;
     width:  s32;
     height: s32;
@@ -31,20 +31,20 @@ GameOffscreenBuffer :: struct {
 }
 
 
-GameSoundOutputBuffer :: struct {
+Game_Sound_Output_Buffer :: struct {
     samples_per_second: s32;
     sample_count:       s32;
     samples:            *s16;
 }
 
 
-GameButtonState :: struct {
+Game_Button_State :: struct {
     half_transition_count: s32;
     ended_down:            bool;
 }
 
 
-GameControllerInput :: struct {
+Game_Controller_Input :: struct {
     is_analog:    bool;
     is_connected: bool;
 
@@ -52,37 +52,37 @@ GameControllerInput :: struct {
     stick_average_y: float32;
 
     union {
-        buttons: [12]GameButtonState;
+        buttons: [12]Game_Button_State;
         struct {
-            move_up:        GameButtonState;
-            move_down:      GameButtonState;
-            move_left:      GameButtonState;
-            move_right:     GameButtonState;
+            move_up:        Game_Button_State;
+            move_down:      Game_Button_State;
+            move_left:      Game_Button_State;
+            move_right:     Game_Button_State;
 
-            action_up:      GameButtonState;
-            action_down:    GameButtonState;
-            action_left:    GameButtonState;
-            action_right:   GameButtonState;
+            action_up:      Game_Button_State;
+            action_down:    Game_Button_State;
+            action_left:    Game_Button_State;
+            action_right:   Game_Button_State;
 
-            left_shoulder:  GameButtonState;
-            right_shoulder: GameButtonState;
-            back:           GameButtonState;
-            start:          GameButtonState;
+            left_shoulder:  Game_Button_State;
+            right_shoulder: Game_Button_State;
+            back:           Game_Button_State;
+            start:          Game_Button_State;
 
-            terminator:     GameButtonState; // NOTE(nahua): for assert purpose only
+            terminator:     Game_Button_State; // NOTE(nahua): for assert purpose only
         }
     }
 }
 
 
-GameInput :: struct {
+Game_Input :: struct {
     // NOTE(nahua): 1 keyboard + 4 controllers
     // Keyboard:    Windows API - Controller 0
     // Gamepad 0-3: XInput API  - Controller 1, 2, 3, 4
-    controllers: [5]GameControllerInput;
+    controllers: [5]Game_Controller_Input;
 }
 
-GameMemory :: struct {
+Game_Memory :: struct {
     permanent_storage_size: u64;
     permanent_storage:      *void;
     transient_storage_size: u64;
@@ -91,21 +91,21 @@ GameMemory :: struct {
 }
 
 
-GameState :: struct {
+Game_State :: struct {
     tone_hz:  s32;
     x_offset: s32;
     y_offset: s32;
 }
 
 
-get_controller :: (input: *GameInput, controller_index: s64) -> *GameControllerInput {
+get_controller :: (input: *Game_Input, controller_index: s64) -> *Game_Controller_Input {
     assert(controller_index < input.controllers.count);
-    result: *GameControllerInput = *input.controllers[controller_index];
+    result: *Game_Controller_Input = *input.controllers[controller_index];
     return result;
 }
 
 
-game_output_sound :: (sound_buffer: *GameSoundOutputBuffer, tone_hz: s32) {
+game_output_sound :: (sound_buffer: *Game_Sound_Output_Buffer, tone_hz: s32) {
     sample_out: *s16 = sound_buffer.samples;
     tsine: float32;
     tone_volume: s16 = 3000;
@@ -128,11 +128,11 @@ game_output_sound :: (sound_buffer: *GameSoundOutputBuffer, tone_hz: s32) {
 }
 
 
-game_update_and_render :: (memory: *GameMemory, input: *GameInput, buffer: *GameOffscreenBuffer, sound_buffer: *GameSoundOutputBuffer) {
+game_update_and_render :: (memory: *Game_Memory, input: *Game_Input, buffer: *Game_Offscreen_Buffer, sound_buffer: *Game_Sound_Output_Buffer) {
     assert(*input.controllers[0].terminator - *input.controllers[0].buttons[0] == input.controllers[0].buttons.count);
-    assert(size_of(GameState) <= memory.permanent_storage_size);
+    assert(size_of(Game_State) <= memory.permanent_storage_size);
 
-    game_state: *GameState = cast(*GameState) memory.permanent_storage;
+    game_state: *Game_State = cast(*Game_State) memory.permanent_storage;
 
     if !memory.is_initialized {
         #if HANDMADE_INTERNAL == 1 {
@@ -148,7 +148,7 @@ game_update_and_render :: (memory: *GameMemory, input: *GameInput, buffer: *Game
     }
 
     for controller_index: 0..input.controllers.count-1 {
-        controller: *GameControllerInput = get_controller(input, controller_index);
+        controller: *Game_Controller_Input = get_controller(input, controller_index);
         if controller.is_analog {
             game_state.x_offset += cast(s32) (4.0 * controller.stick_average_x);
             game_state.tone_hz   = 256 + cast(s32) (128.0 * controller.stick_average_y);
@@ -173,7 +173,7 @@ game_update_and_render :: (memory: *GameMemory, input: *GameInput, buffer: *Game
 }
 
 
-render_weird_gradient :: (buffer: *GameOffscreenBuffer, x_offset: s32, y_offset: s32) {
+render_weird_gradient :: (buffer: *Game_Offscreen_Buffer, x_offset: s32, y_offset: s32) {
     row := cast(*u8) buffer.memory;
 
     for y: 0..buffer.height-1 {

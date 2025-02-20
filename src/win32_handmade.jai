@@ -52,7 +52,13 @@
 /*
 Handmade Hero Structs
 */
-Win32OffscreenBuffer :: struct {
+Win32_Debug_Time_Marker :: struct {
+    play_cursor:  s32;
+    write_cursor: s32;
+}
+
+
+Win32_Offscreen_Buffer :: struct {
     // NOTE(nahua)   : Pixels are always 32 bits wide
     // Memory Order  : 0x BB GG RR xx
     // Little Endian : 0x xx RR GG BB
@@ -61,20 +67,21 @@ Win32OffscreenBuffer :: struct {
     width:           s32;
     height:          s32;
     pitch:           s32;
+    bytes_per_pixel: s32;
 }
 
 
-Win32WindowDimension :: struct {
+Win32_Window_Dimension :: struct {
     width:  s32;
     height: s32;
 }
 
 
-Win32SoundOutput :: struct {
+Win32_Sound_Output :: struct {
     samples_per_second:    s32;
     bytes_per_sample:      s32;
     secondary_buffer_size: s32;
-    running_sample_index:  u32;
+    running_sample_index:  s32;
     latency_sample_count:  s32;
 }
 
@@ -82,7 +89,7 @@ Win32SoundOutput :: struct {
 /*
 Handmade Hero Variables
 */
-global_back_buffer: Win32OffscreenBuffer;
+global_back_buffer: Win32_Offscreen_Buffer;
 global_running: bool;
 global_secondary_buffer: *IDirectSoundBuffer8;
 global_perf_count_frequency: s64;
@@ -91,8 +98,11 @@ global_perf_count_frequency: s64;
 /*
 Handmade Hero Constants
 */
-WINDOW_CLASS_NAME :: "HandmadeHeroWindowClass";
-WINDOW_NAME :: "Handmade Hero";
+FRAMES_OF_AUDIO_LATENCY :: 3;
+GAME_UPDATE_HZ          :: MONITOR_REFRESH_HZ / 2;
+MONITOR_REFRESH_HZ      :: 60;
+WINDOW_CLASS_NAME       :: "HandmadeHeroWindowClass";
+WINDOW_NAME             :: "Handmade Hero";
 
 
 /*
@@ -106,8 +116,8 @@ File I/O DEBUG for Win32
     }
 
 
-    debug_platform_read_entire_file :: (filename: string) -> DebugReadFileResult {
-        result: DebugReadFileResult;
+    debug_platform_read_entire_file :: (filename: string) -> Debug_Read_File_Result {
+        result: Debug_Read_File_Result;
         handle := CreateFileA(filename.data, GENERIC_READ);
 
         if handle != INVALID_HANDLE_VALUE {
@@ -175,6 +185,47 @@ File I/O DEBUG for Win32
 /*
 Handmade Hero Win32 System-Related Procedures
 */
+win32_debug_draw_vertical :: (back_buffer: *Win32_Offscreen_Buffer, x: int, top: int, bottom: int, color: u32) {
+    pixel := cast(*u8) back_buffer.memory + top * back_buffer.pitch + x * back_buffer.bytes_per_pixel;
+
+    for top..bottom-1 {
+        (cast(*u32) pixel).* = color;
+        pixel += back_buffer.pitch;
+    }
+}
+
+
+win32_debug_sync_display :: (back_buffer: *Win32_Offscreen_Buffer,
+                             marker_count: s64,
+                             markers: []Win32_Debug_Time_Marker,
+                             sound_output: *Win32_Sound_Output,
+                             target_seconds_per_frame: float32) {
+    pad_x  := 16;
+    pad_y  := 16;
+    top    := pad_y;
+    bottom := back_buffer.height - pad_y;
+
+    c: float32 = (cast(float32) back_buffer.width - 2 * pad_x) / (cast(float32) sound_output.secondary_buffer_size);
+
+    for marker_index: 0..marker_count-1 {
+        this_marker: *Win32_Debug_Time_Marker = *markers[marker_index];
+        win32_draw_sound_buffer_marker(back_buffer, sound_output, c, pad_x, top, bottom, this_marker.play_cursor, 0xFFFFFFFF);
+        win32_draw_sound_buffer_marker(back_buffer, sound_output, c, pad_x, top, bottom, this_marker.write_cursor, 0xFFFF0000);
+    }
+}
+
+
+win32_draw_sound_buffer_marker :: (back_buffer: *Win32_Offscreen_Buffer,
+                                   sound_output: *Win32_Sound_Output,
+                                   c: float32, pad_x: int, top: int, bottom: int,
+                                   value: s32, color: u32) {
+    assert(value < sound_output.secondary_buffer_size);
+    x_f32: float32 = c * cast(float32) value;
+    x := pad_x + cast(int) x_f32;
+    win32_debug_draw_vertical(back_buffer, x, top, bottom, color);
+}
+
+
 win32_get_seconds_elapsed :: inline (start: s64, end: s64) -> float32 {
     result: float32 = (cast(float32) (end - start)) / (cast(float32) global_perf_count_frequency);
     return result;
@@ -188,8 +239,8 @@ win32_get_wall_clock :: inline () -> s64 {
 }
 
 
-win32_get_window_dimension :: (window: HWND) -> Win32WindowDimension {
-    result: Win32WindowDimension;
+win32_get_window_dimension :: (window: HWND) -> Win32_Window_Dimension {
+    result: Win32_Window_Dimension;
 
     client_rect: RECT;
     GetClientRect(window, *client_rect);
@@ -200,15 +251,16 @@ win32_get_window_dimension :: (window: HWND) -> Win32WindowDimension {
 }
 
 
-win32_resize_dib_section :: (buffer: *Win32OffscreenBuffer, width: s32, height: s32) {
+win32_resize_dib_section :: (buffer: *Win32_Offscreen_Buffer, width: s32, height: s32) {
     if buffer.memory {
         VirtualFree(buffer.memory, 0, MEM_RELEASE);
     }
 
-    bytes_per_pixel: WORD = 4; // u32
+    bytes_per_pixel: s32 = 4;
+    buffer.bytes_per_pixel = bytes_per_pixel;
     buffer.width = width;
     buffer.height = height;
-    buffer.pitch = buffer.width * cast(s32) bytes_per_pixel;
+    buffer.pitch = buffer.width * bytes_per_pixel;
 
     buffer.info.bmiHeader.biSize = size_of(BITMAPINFOHEADER);
     buffer.info.bmiHeader.biWidth = buffer.width;
@@ -217,12 +269,12 @@ win32_resize_dib_section :: (buffer: *Win32OffscreenBuffer, width: s32, height: 
     buffer.info.bmiHeader.biBitCount = 32;
     buffer.info.bmiHeader.biCompression = BI_RGB;
 
-    bitmap_memory_size := (cast(s32) bytes_per_pixel) * (buffer.width * buffer.height);
+    bitmap_memory_size := bytes_per_pixel * buffer.width * buffer.height;
     buffer.memory = VirtualAlloc(null, xx bitmap_memory_size, MEM_COMMIT, PAGE_READWRITE);
 }
 
 
-win32_display_buffer_window :: (device_context: HDC, window_width: s32, window_height: s32, buffer: *Win32OffscreenBuffer) {
+win32_display_buffer_in_window :: (device_context: HDC, window_width: s32, window_height: s32, buffer: *Win32_Offscreen_Buffer) {
     StretchDIBits(device_context,
                   0, 0, window_width, window_height, // Destination (window)
                   0, 0, buffer.width, buffer.height, // Source (bitmap buffer)
@@ -283,7 +335,7 @@ win32_init_dsound :: (window: HWND, samples_per_second: s32, secondary_buffer_si
     // NOTE(nahua): "Create" a secondary buffer
     sec_desc:              DSBUFFERDESC;
     sec_desc.dwSize        = size_of(DSBUFFERDESC);
-    sec_desc.dwFlags       = 0;
+    sec_desc.dwFlags       = DSBCAPS_GETCURRENTPOSITION2;
     sec_desc.dwBufferBytes = secondary_buffer_size;
     sec_desc.lpwfxFormat   = *wfx.Format;
 
@@ -292,7 +344,7 @@ win32_init_dsound :: (window: HWND, samples_per_second: s32, secondary_buffer_si
 }
 
 
-win32_clear_buffer :: (sound_output: *Win32SoundOutput) {
+win32_clear_buffer :: (sound_output: *Win32_Sound_Output) {
     region1, region2: *void;
     region1_size, region2_size: s32;
 
@@ -328,10 +380,10 @@ win32_clear_buffer :: (sound_output: *Win32SoundOutput) {
 }
 
 
-win32_fill_sound_buffer :: (sound_output: *Win32SoundOutput,
+win32_fill_sound_buffer :: (sound_output: *Win32_Sound_Output,
                             byte_to_lock: s32,
                             bytes_to_write: s32,
-                            source_buffer: *GameSoundOutputBuffer) {
+                            source_buffer: *Game_Sound_Output_Buffer) {
     region1, region2: *void;
     region1_size, region2_size: s32;
 
@@ -383,7 +435,7 @@ win32_fill_sound_buffer :: (sound_output: *Win32SoundOutput,
 }
 
 
-win32_process_xinput_digital_button :: (xinput_button_state: s32, old_state: *GameButtonState, button_bit: s32, new_state: *GameButtonState) {
+win32_process_xinput_digital_button :: (xinput_button_state: s32, old_state: *Game_Button_State, button_bit: s32, new_state: *Game_Button_State) {
     new_state.ended_down = ((xinput_button_state & button_bit) == button_bit);
     new_state.half_transition_count = cast(s32) ifx (old_state.ended_down != new_state.ended_down) then 1 else 0;
 }
@@ -404,14 +456,14 @@ win32_process_xinput_stick_value :: (value: s16, deadzone_threshold: s16) -> flo
 }
 
 
-win32_process_keyboard_message :: (new_state: *GameButtonState, is_down: bool) {
+win32_process_keyboard_message :: (new_state: *Game_Button_State, is_down: bool) {
     assert(new_state.ended_down != is_down);
     new_state.ended_down = is_down;
     new_state.half_transition_count += 1;
 }
 
 
-win32_process_pending_messages :: (keyboard_controller: *GameControllerInput) {
+win32_process_pending_messages :: (keyboard_controller: *Game_Controller_Input) {
     message: MSG;
     while PeekMessageA(*message, null, 0, 0, PM_REMOVE) {
         if message.message == {
@@ -502,7 +554,7 @@ win32_window_callback :: (window: HWND, message: u32, wParam: WPARAM, lParam: LP
             push_context{
                 print("WM_PAINT!\n");
                 dimension := win32_get_window_dimension(window);
-                win32_display_buffer_window(device_context,
+                win32_display_buffer_in_window(device_context,
                                             dimension.width,
                                             dimension.height,
                                             *global_back_buffer);
@@ -542,9 +594,7 @@ main :: () {
     window_class.lpszClassName = utf8_to_wide(WINDOW_CLASS_NAME);
 
     // TODO(nahua): How do we reliably query on this on Windows?
-    monitor_refresh_hz := 60;
-    game_update_hz := monitor_refresh_hz / 2;
-    target_seconds_per_frame: float32 = 1.0 / cast(float32) game_update_hz;
+    target_seconds_per_frame: float32 = 1.0 / cast(float32) GAME_UPDATE_HZ;
 
     if RegisterClassExW(*window_class) {
         window := CreateWindowExW(0,
@@ -565,12 +615,12 @@ main :: () {
             // device context and use it forever because we're not sharing it.
             device_context := GetDC(window);
 
-            sound_output: Win32SoundOutput;
+            sound_output: Win32_Sound_Output;
             sound_output.samples_per_second    = 48000;
             sound_output.bytes_per_sample      = size_of(s16) * 2;
             sound_output.secondary_buffer_size = 2 * sound_output.samples_per_second * sound_output.bytes_per_sample;
             sound_output.running_sample_index  = 0;
-            sound_output.latency_sample_count  = sound_output.samples_per_second / 15;
+            sound_output.latency_sample_count  = FRAMES_OF_AUDIO_LATENCY * (sound_output.samples_per_second / GAME_UPDATE_HZ);
 
             win32_init_dsound(window, sound_output.samples_per_second, sound_output.secondary_buffer_size);
             win32_clear_buffer(*sound_output);
@@ -582,7 +632,7 @@ main :: () {
             } else {
                 BASE_ADDRESS: *void = cast(*void) 0;
             }
-            game_memory: GameMemory;
+            game_memory: Game_Memory;
             game_memory.permanent_storage_size = Megabytes(cast(u64) 64);
             game_memory.transient_storage_size = Gigabytes(cast(u64) 1);
             total_storage_size: u64            = game_memory.permanent_storage_size + game_memory.transient_storage_size;
@@ -590,17 +640,34 @@ main :: () {
             game_memory.transient_storage      = cast(*void) (cast(u64) game_memory.permanent_storage) + game_memory.permanent_storage_size;
 
             if samples && game_memory.permanent_storage && game_memory.transient_storage {
-                input: [2]GameInput;
-                old_input: *GameInput = *input[0];
-                new_input: *GameInput = *input[1];
-                global_running = true;
+                input: [2]Game_Input;
+                old_input: *Game_Input = *input[0];
+                new_input: *Game_Input = *input[1];
+
+                debug_time_marker_index := 0;
+                debug_time_markers: [GAME_UPDATE_HZ / 2]Win32_Debug_Time_Marker;
+
+                last_play_cursor: s32 = 0;
+                sound_is_valid: bool;
+
                 last_counter: s64 = win32_get_wall_clock();
                 last_cycle_count: u64 = rdtsc();
 
+                global_running = true;
+
+                #if HANDMADE_INTERNAL == -1 {
+                    // NOTE(nahua): This tests the PlayCursor/WriteCursor update frequency
+                    while global_running {
+                        play_cursor:  s32;
+                        write_cursor: s32;
+                        global_secondary_buffer.GetCurrentPosition(global_secondary_buffer, *play_cursor, *write_cursor);
+                        print("PC:% WC:%\n", play_cursor, write_cursor);
+                    }
+                }
                 while global_running {
-                    old_keyboard_controller: *GameControllerInput = get_controller(old_input, 0);
-                    new_keyboard_controller: *GameControllerInput = get_controller(new_input, 0);
-                    empty_keyboard_controller: GameControllerInput;
+                    old_keyboard_controller: *Game_Controller_Input = get_controller(old_input, 0);
+                    new_keyboard_controller: *Game_Controller_Input = get_controller(new_input, 0);
+                    empty_keyboard_controller: Game_Controller_Input;
                     << new_keyboard_controller = empty_keyboard_controller;
                     new_keyboard_controller.is_connected = true;
 
@@ -620,8 +687,8 @@ main :: () {
 
                     // NOTE(nahua): Iterate over the controllers (index 1 to 4)
                     for controller_index: 1..max_controller_count-1 {
-                        old_controller: *GameControllerInput = get_controller(old_input, controller_index);
-                        new_controller: *GameControllerInput = get_controller(new_input, controller_index);
+                        old_controller: *Game_Controller_Input = get_controller(old_input, controller_index);
+                        new_controller: *Game_Controller_Input = get_controller(new_input, controller_index);
 
                         state: XINPUT_STATE;
                         result := XInputGetState(0, *state);
@@ -682,23 +749,20 @@ main :: () {
                     XInputSetState(0, *vibration);
 
                     // Buffer
-                    buffer: GameOffscreenBuffer;
+                    buffer: Game_Offscreen_Buffer;
                     buffer.memory = global_back_buffer.memory;
                     buffer.width  = global_back_buffer.width;
                     buffer.height = global_back_buffer.height;
                     buffer.pitch  = global_back_buffer.pitch;
 
                     // Sound Buffer
+                    // NOTE(nahua): Compute how much sound to write and where
                     byte_to_lock   : s32;
                     bytes_to_write : s32;
-                    play_cursor    : s32;
                     target_cursor  : s32;
-                    write_cursor   : s32;
-                    sound_is_valid : bool;
-                    hr := global_secondary_buffer.GetCurrentPosition(global_secondary_buffer, *play_cursor, *write_cursor);
-                    if SUCCEEDED(hr) {
+                    if sound_is_valid {
                         byte_to_lock  = ((cast(s32) sound_output.running_sample_index) * sound_output.bytes_per_sample) % sound_output.secondary_buffer_size;
-                        target_cursor = (play_cursor + (sound_output.latency_sample_count * sound_output.bytes_per_sample)) % sound_output.secondary_buffer_size;
+                        target_cursor = (last_play_cursor + (sound_output.latency_sample_count * sound_output.bytes_per_sample)) % sound_output.secondary_buffer_size;
 
                         if byte_to_lock > target_cursor {
                             // Play cursor is behind
@@ -708,11 +772,9 @@ main :: () {
                             // Play cursor is in front
                             bytes_to_write = target_cursor - byte_to_lock;                      // region 1
                         }
-
-                        sound_is_valid = true;
                     }
 
-                    sound_buffer: GameSoundOutputBuffer;
+                    sound_buffer: Game_Sound_Output_Buffer;
                     sound_buffer.samples_per_second = sound_output.samples_per_second;
                     sound_buffer.sample_count = bytes_to_write / sound_output.bytes_per_sample;
                     sound_buffer.samples = samples;
@@ -720,27 +782,32 @@ main :: () {
                     game_update_and_render(memory=*game_memory, input=new_input, buffer=*buffer, sound_buffer=*sound_buffer);
 
                     if sound_is_valid {
+                        #if HANDMADE_INTERNAL == 1 {
+                            play_cursor:  s32;
+                            write_cursor: s32;
+                            global_secondary_buffer.GetCurrentPosition(global_secondary_buffer, *play_cursor, *write_cursor);
+                            print("PC:% BTL:% TC:% BTW:%\n", play_cursor, byte_to_lock, target_cursor, bytes_to_write);
+                        }
                         win32_fill_sound_buffer(*sound_output, byte_to_lock, bytes_to_write, *sound_buffer);
                     }
-
-                    dimension := win32_get_window_dimension(window);
-                    win32_display_buffer_window(device_context,
-                                                dimension.width,
-                                                dimension.height,
-                                                *global_back_buffer);
 
                     work_counter: s64 = win32_get_wall_clock();
                     work_seconds_elapsed: float32 = win32_get_seconds_elapsed(last_counter, work_counter);
                     seconds_elapsed_for_frame: float32 = work_seconds_elapsed;
-
                     if seconds_elapsed_for_frame < target_seconds_per_frame {
-                        while seconds_elapsed_for_frame < target_seconds_per_frame {
-                            if sleep_is_granular {
-                                sleep_ms: s32 = cast(s32) (1000.0 * (target_seconds_per_frame - seconds_elapsed_for_frame));
-                                if sleep_ms > 0 {
-                                    Sleep(sleep_ms);
-                                }
+                        if sleep_is_granular {
+                            sleep_ms: s32 = cast(s32) (1000.0 * (target_seconds_per_frame - seconds_elapsed_for_frame));
+                            if sleep_ms > 0 {
+                                Sleep(sleep_ms);
                             }
+                        }
+
+                        test_seconds_elapsed_for_frame := win32_get_seconds_elapsed(last_counter, win32_get_wall_clock());
+                        if test_seconds_elapsed_for_frame < target_seconds_per_frame {
+                            // TODO(nahua): LOG MISSED SLEEP HERE
+                        }
+
+                        while seconds_elapsed_for_frame < target_seconds_per_frame {
                             seconds_elapsed_for_frame = win32_get_seconds_elapsed(last_counter, win32_get_wall_clock());
                         }
                     } else {
@@ -748,25 +815,63 @@ main :: () {
                         // TODO(nahua): Logging
                     }
 
-                    temp_input: *GameInput = new_input;
-                    new_input = old_input;
-                    old_input = temp_input;
-
                     end_counter: s64 = win32_get_wall_clock();
                     ms_per_frame: float32 = 1000.0 * win32_get_seconds_elapsed(last_counter, end_counter);
                     last_counter = end_counter;
+
+                    // NOTE(nahua): Moved here from before getting work_counter to align with source code
+                    dimension := win32_get_window_dimension(window);
+                    #if HANDMADE_INTERNAL == 1 {
+                        win32_debug_sync_display(*global_back_buffer,
+                                                 debug_time_markers.count,
+                                                 debug_time_markers,
+                                                 *sound_output,
+                                                 target_seconds_per_frame);
+                    }
+                    win32_display_buffer_in_window(device_context,
+                                                dimension.width,
+                                                dimension.height,
+                                                *global_back_buffer);
+                    play_cursor:  s32;
+                    write_cursor: s32;
+                    if SUCCEEDED(global_secondary_buffer.GetCurrentPosition(global_secondary_buffer, *play_cursor, *write_cursor)) {
+                        last_play_cursor = play_cursor;
+                        if !sound_is_valid {
+                            sound_output.running_sample_index = write_cursor / sound_output.bytes_per_sample;
+                            sound_is_valid = true;
+                        }
+                    } else {
+                        sound_is_valid = false;
+                    }
+
+                    #if HANDMADE_INTERNAL == 1 {
+                        // NOTE(nahua): This is debug code
+                        assert(debug_time_marker_index < debug_time_markers.count);
+                        marker: *Win32_Debug_Time_Marker = *debug_time_markers[debug_time_marker_index];
+                        debug_time_marker_index += 1;
+                        if debug_time_marker_index == debug_time_markers.count {
+                            debug_time_marker_index = 0;
+                        }
+                        marker.play_cursor = play_cursor;
+                        marker.write_cursor = write_cursor;
+                    }
+
+                    temp_input: *Game_Input = new_input;
+                    new_input = old_input;
+                    old_input = temp_input;
 
                     end_cycle_count: u64 = rdtsc();
                     cycles_elapsed: u64 = end_cycle_count - last_cycle_count;
                     last_cycle_count = end_cycle_count;
 
-                    // ms_per_frame := cast(float32) ((1000 * cast(float32) counter_elapsed) / cast(float32) global_perf_count_frequency);
-                    // fps := (cast(float32) global_perf_count_frequency / cast(float32) counter_elapsed);
-                    // mega_cycles_per_frame := cast(float32) cycles_elapsed / (1000 * 1000);
-                    // print("ms/frame: %ms\t%FPS\t%Mc/f\n",
-                    //       formatFloat(ms_per_frame, trailing_width = 2),
-                    //       formatFloat(fps, trailing_width = 2),
-                    //       formatFloat(mega_cycles_per_frame, trailing_width = 2));
+                    if HANDMADE_INTERNAL == 0 {
+                        fps := 0.0;
+                        mega_cycles_per_frame := cast(float32) cycles_elapsed / (1000 * 1000);
+                        print("ms/frame: %ms\t%FPS\t%Mc/f\n",
+                              formatFloat(ms_per_frame, trailing_width = 2),
+                              formatFloat(fps, trailing_width = 2),
+                              formatFloat(mega_cycles_per_frame, trailing_width = 2));
+                    }
                 }
             } else {
                 // Memory allocation failed

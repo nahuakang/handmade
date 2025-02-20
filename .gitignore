@@ -1,3 +1,4 @@
 .build/
+test.out
 win32_handmade.exe
 win32_handmade.pdb
