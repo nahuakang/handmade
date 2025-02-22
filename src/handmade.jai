@@ -124,11 +124,20 @@ game_output_sound :: (sound_buffer: *Game_Sound_Output_Buffer, tone_hz: s32) {
         sample_out += 1;
 
         tsine += 2.0 * PI / (cast(float32) wave_period);
+        if tsine > 2.0 * PI {
+            tsine -= 2.0 * PI;
+        }
     }
 }
 
 
-game_update_and_render :: (memory: *Game_Memory, input: *Game_Input, buffer: *Game_Offscreen_Buffer, sound_buffer: *Game_Sound_Output_Buffer) {
+game_get_sound_samples :: (memory: *Game_Memory, sound_buffer: *Game_Sound_Output_Buffer) {
+    game_state: *Game_State = cast(*Game_State) memory.permanent_storage;
+    game_output_sound(sound_buffer, game_state.tone_hz);
+}
+
+
+game_update_and_render :: (memory: *Game_Memory, input: *Game_Input, buffer: *Game_Offscreen_Buffer) {
     assert(*input.controllers[0].terminator - *input.controllers[0].buttons[0] == input.controllers[0].buttons.count);
     assert(size_of(Game_State) <= memory.permanent_storage_size);
 
@@ -168,7 +177,6 @@ game_update_and_render :: (memory: *Game_Memory, input: *Game_Input, buffer: *Ga
         }
     }
 
-    game_output_sound(sound_buffer, game_state.tone_hz);
     render_weird_gradient(buffer, game_state.x_offset, game_state.y_offset);
 }
 
