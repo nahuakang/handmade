@@ -1,4 +1,9 @@
 .build/
+handmade.dll
+handmade.exp
+handmade.lib
+handmade.pdb
+handmade_temp.dll
 test.out
 win32_handmade.exe
 win32_handmade.pdb

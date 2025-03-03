@@ -18,6 +18,8 @@
 */
 
 #import "Basic";
+#import "File";
+#import "File_Utilities";
 #import "Gamepad";
 #if CPU == .X64 {
     #import "Machine_X64";  // For rdtsc, etc.
@@ -44,9 +46,9 @@
 #import "Windows";
 #import "Windows_Utf8";
 
-#load "windows.jai"; // Patching Windows module in Jai
-#load "dsound.jai";  // Patching Sound_Player module in Jai
-#load "handmade.jai";
+#load "windows.jai";          // Patching Windows module in Jai
+#load "dsound.jai";           // Patching Sound_Player module in Jai
+#load "handmade_common.jai";  // Shared types between win32 platform and game code
 
 
 /*
@@ -61,6 +63,15 @@ Win32_Debug_Time_Marker :: struct {
 
     flip_play_cursor:          s32;
     flip_write_cursor:         s32;
+}
+
+
+Win32_Game_Code :: struct {
+    game_code_dll:          HMODULE;
+    update_and_render: Game_Update_And_Render;
+    get_sound_samples: Game_Get_Sound_Samples;
+
+    is_valid:               bool;
 }
 
 
@@ -113,85 +124,44 @@ WINDOW_NAME             :: "Handmade Hero";
 
 
 /*
-File I/O DEBUG for Win32
+Handmade Hero Win32 System-Related Procedures
 */
-#if HANDMADE_INTERNAL == 1 {
-    debug_platform_free_file_memory :: (memory: *void) {
-        if memory {
-            VirtualFree(memory, 0, MEM_RELEASE);
-        }
-    }
+win32_clear_buffer :: (sound_output: *Win32_Sound_Output) {
+    region1, region2: *void;
+    region1_size, region2_size: s32;
 
-
-    debug_platform_read_entire_file :: (filename: string) -> Debug_Read_File_Result {
-        result: Debug_Read_File_Result;
-        handle := CreateFileA(filename.data, GENERIC_READ);
-
-        if handle != INVALID_HANDLE_VALUE {
-            file_size: LARGE_INTEGER;
-            if GetFileSizeEx(handle, *file_size) {
-                result.contents = VirtualAlloc(null, xx file_size.QuadPart, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-                if result.contents {
-                    bytes_read: DWORD; // u32
-                    read_success := ReadFile(handle, result.contents, xx file_size.QuadPart, *bytes_read);
-                    if read_success && file_size.QuadPart == cast(s64) bytes_read {
-                        // NOTE(nahua): File read successfully
-                        result.contents_size = bytes_read;
-                    } else {
-                        // ERROR: Read failed
-                        debug_platform_free_file_memory(result.contents);
-                        result.contents = null;
-                        // TODO(nahua): Logging
-                    }
-                } else {
-                    // ERROR: Memory allocation failed
-                    // TODO(nahua): Logging
-                }
-            } else {
-                // ERROR: File size evaluation failed
-                // TODO(nahua): Logging
-            }
-            CloseHandle(handle);
-        } else {
-            // ERROR: Handle creation failed
-            // TODO(nahua): Logging
+    hr := global_secondary_buffer.Lock(global_secondary_buffer,
+                                       0,
+                                       sound_output.secondary_buffer_size,
+                                       *region1, *region1_size,
+                                       *region2, *region2_size,
+                                       0);
+    if SUCCEEDED(hr) {
+        region1_sample_count := region1_size / sound_output.bytes_per_sample;
+        dest_sample    := cast(*u8) region1;
+        byte_index: s32 = 0;
+        while byte_index < region1_sample_count {
+            defer byte_index += 1;
+            << dest_sample = 0;
+            dest_sample += 1;
         }
 
-        return result;
-    }
-
-
-    debug_platform_write_entire_file :: (filename: string, memory_size: u32, memory: *void) -> bool {
-        result: bool;
-        handle := CreateFileA(filename=filename.data,
-                              desired_access=GENERIC_WRITE,
-                              share_mode=0x0,
-                              creation=CREATE_ALWAYS);
-
-        if handle != INVALID_HANDLE_VALUE {
-            bytes_written: DWORD; // u32
-            read_success := WriteFile(handle, memory, memory_size, *bytes_written, null);
-            if read_success {
-                // NOTE(nahua): File written successfully
-                result = (bytes_written == memory_size);
-            } else {
-                // ERROR: Write failed
-                // TODO(nahua): Logging
-            }
-            CloseHandle(handle);
-        } else {
-            // ERROR: Handle creation failed
-            // TODO(nahua): Logging
+        region2_sample_count := region2_size / sound_output.bytes_per_sample;
+        dest_sample = cast(*u8) region2;
+        byte_index  = 0;
+        while byte_index < region2_sample_count {
+            defer byte_index += 1;
+            << dest_sample = 0;
+            dest_sample += 1;
         }
 
-        return result;
+        global_secondary_buffer.Unlock(global_secondary_buffer,
+                                       region1, region1_size,
+                                       region2, region2_size);
     }
 }
 
 
-/*
-Handmade Hero Win32 System-Related Procedures
-*/
 win32_debug_draw_vertical :: (back_buffer: *Win32_Offscreen_Buffer, x: int, top: int, bottom: int, color: u32) {
     if top <= 0                    then top = 0;
     if bottom > back_buffer.height then bottom = back_buffer.height;
@@ -281,6 +251,72 @@ win32_draw_sound_buffer_marker :: (back_buffer: *Win32_Offscreen_Buffer,
 }
 
 
+win32_display_buffer_in_window :: (device_context: HDC, window_width: s32, window_height: s32, buffer: *Win32_Offscreen_Buffer) {
+    StretchDIBits(device_context,
+                  0, 0, window_width, window_height, // Destination (window)
+                  0, 0, buffer.width, buffer.height, // Source (bitmap buffer)
+                  buffer.memory,
+                  *buffer.info,
+                  DIB_RGB_COLORS,
+                  ROP.SRCCOPY);
+}
+
+
+win32_fill_sound_buffer :: (sound_output: *Win32_Sound_Output,
+                            byte_to_lock: s32,
+                            bytes_to_write: s32,
+                            source_buffer: *Game_Sound_Output_Buffer) {
+    region1, region2: *void;
+    region1_size, region2_size: s32;
+
+    hr := global_secondary_buffer.Lock(global_secondary_buffer,
+                                       cast(s32) byte_to_lock,
+                                       cast(s32) bytes_to_write,
+                                       *region1, *region1_size,
+                                       *region2, *region2_size,
+                                       0);
+    if SUCCEEDED(hr) {
+        // TODO(nahua): Assert that Region1Size/Region2Size are valid
+        region1_sample_count: s32  = region1_size / sound_output.bytes_per_sample;
+        source_sample       : *s16 = source_buffer.samples;
+        dest_sample         : *s16 = cast(*s16) region1;
+
+        sample_index: s32 = 0;
+        while sample_index < region1_sample_count {
+            defer sample_index += 1;
+            defer sound_output.running_sample_index += 1;
+
+            << dest_sample = << source_sample;
+            source_sample += 1;
+            dest_sample   += 1;
+            << dest_sample = << source_sample;
+            source_sample += 1;
+            dest_sample   += 1;
+        }
+
+        dest_sample = cast(*s16) region2;
+        region2_sample_count: s32 = region2_size / sound_output.bytes_per_sample;
+
+        sample_index = 0;
+        while sample_index < region2_sample_count {
+            defer sample_index += 1;
+            defer sound_output.running_sample_index += 1;
+
+            << dest_sample = << source_sample;
+            source_sample += 1;
+            dest_sample   += 1;
+            << dest_sample = << source_sample;
+            source_sample += 1;
+            dest_sample   += 1;
+        }
+
+        global_secondary_buffer.Unlock(global_secondary_buffer,
+                                       region1, region1_size,
+                                       region2, region2_size);
+    }
+}
+
+
 win32_get_seconds_elapsed :: inline (start: s64, end: s64) -> float32 {
     result: float32 = (cast(float32) (end - start)) / (cast(float32) global_perf_count_frequency);
     return result;
@@ -303,40 +339,6 @@ win32_get_window_dimension :: (window: HWND) -> Win32_Window_Dimension {
     result.height = client_rect.bottom - client_rect.top;
 
     return result;
-}
-
-
-win32_resize_dib_section :: (buffer: *Win32_Offscreen_Buffer, width: s32, height: s32) {
-    if buffer.memory {
-        VirtualFree(buffer.memory, 0, MEM_RELEASE);
-    }
-
-    bytes_per_pixel: s32 = 4;
-    buffer.bytes_per_pixel = bytes_per_pixel;
-    buffer.width = width;
-    buffer.height = height;
-    buffer.pitch = buffer.width * bytes_per_pixel;
-
-    buffer.info.bmiHeader.biSize = size_of(BITMAPINFOHEADER);
-    buffer.info.bmiHeader.biWidth = buffer.width;
-    buffer.info.bmiHeader.biHeight = -buffer.height; // Negative value for top-down pitch
-    buffer.info.bmiHeader.biPlanes = 1;
-    buffer.info.bmiHeader.biBitCount = 32;
-    buffer.info.bmiHeader.biCompression = BI_RGB;
-
-    bitmap_memory_size := bytes_per_pixel * buffer.width * buffer.height;
-    buffer.memory = VirtualAlloc(null, xx bitmap_memory_size, MEM_COMMIT, PAGE_READWRITE);
-}
-
-
-win32_display_buffer_in_window :: (device_context: HDC, window_width: s32, window_height: s32, buffer: *Win32_Offscreen_Buffer) {
-    StretchDIBits(device_context,
-                  0, 0, window_width, window_height, // Destination (window)
-                  0, 0, buffer.width, buffer.height, // Source (bitmap buffer)
-                  buffer.memory,
-                  *buffer.info,
-                  DIB_RGB_COLORS,
-                  ROP.SRCCOPY);
 }
 
 
@@ -399,94 +401,44 @@ win32_init_dsound :: (window: HWND, samples_per_second: s32, secondary_buffer_si
 }
 
 
-win32_clear_buffer :: (sound_output: *Win32_Sound_Output) {
-    region1, region2: *void;
-    region1_size, region2_size: s32;
+win32_load_game_code :: () -> Win32_Game_Code {
+    result: Win32_Game_Code;
 
-    hr := global_secondary_buffer.Lock(global_secondary_buffer,
-                                       0,
-                                       sound_output.secondary_buffer_size,
-                                       *region1, *region1_size,
-                                       *region2, *region2_size,
-                                       0);
-    if SUCCEEDED(hr) {
-        region1_sample_count := region1_size / sound_output.bytes_per_sample;
-        dest_sample    := cast(*u8) region1;
-        byte_index: s32 = 0;
-        while byte_index < region1_sample_count {
-            defer byte_index += 1;
-            << dest_sample = 0;
-            dest_sample += 1;
-        }
-
-        region2_sample_count := region2_size / sound_output.bytes_per_sample;
-        dest_sample = cast(*u8) region2;
-        byte_index  = 0;
-        while byte_index < region2_sample_count {
-            defer byte_index += 1;
-            << dest_sample = 0;
-            dest_sample += 1;
-        }
-
-        global_secondary_buffer.Unlock(global_secondary_buffer,
-                                       region1, region1_size,
-                                       region2, region2_size);
+    success := copy_file("handmade.dll", "handmade_temp.dll");
+    if !success {
+        print("Failed to copy file % to %\n", "handmade.dll", "handmade_temp.dll");
     }
+
+    result.game_code_dll = LoadLibraryA("handmade_temp.dll");
+
+    if result.game_code_dll {
+        result.update_and_render = GetProcAddress(result.game_code_dll, "game_update_and_render");
+        result.get_sound_samples = GetProcAddress(result.game_code_dll, "game_get_sound_samples");
+        result.is_valid = result.update_and_render && result.get_sound_samples;
+    }
+
+    if !result.is_valid {
+        result.update_and_render = game_update_and_render_stub;
+        result.get_sound_samples = game_get_sound_samples_stub;
+    }
+    return result;
 }
 
 
-win32_fill_sound_buffer :: (sound_output: *Win32_Sound_Output,
-                            byte_to_lock: s32,
-                            bytes_to_write: s32,
-                            source_buffer: *Game_Sound_Output_Buffer) {
-    region1, region2: *void;
-    region1_size, region2_size: s32;
-
-    hr := global_secondary_buffer.Lock(global_secondary_buffer,
-                                       cast(s32) byte_to_lock,
-                                       cast(s32) bytes_to_write,
-                                       *region1, *region1_size,
-                                       *region2, *region2_size,
-                                       0);
-    if SUCCEEDED(hr) {
-        // TODO(nahua): Assert that Region1Size/Region2Size are valid
-        region1_sample_count: s32  = region1_size / sound_output.bytes_per_sample;
-        source_sample       : *s16 = source_buffer.samples;
-        dest_sample         : *s16 = cast(*s16) region1;
-
-        sample_index: s32 = 0;
-        while sample_index < region1_sample_count {
-            defer sample_index += 1;
-            defer sound_output.running_sample_index += 1;
-
-            << dest_sample = << source_sample;
-            source_sample += 1;
-            dest_sample   += 1;
-            << dest_sample = << source_sample;
-            source_sample += 1;
-            dest_sample   += 1;
-        }
-
-        dest_sample = cast(*s16) region2;
-        region2_sample_count: s32 = region2_size / sound_output.bytes_per_sample;
-
-        sample_index = 0;
-        while sample_index < region2_sample_count {
-            defer sample_index += 1;
-            defer sound_output.running_sample_index += 1;
-
-            << dest_sample = << source_sample;
-            source_sample += 1;
-            dest_sample   += 1;
-            << dest_sample = << source_sample;
-            source_sample += 1;
-            dest_sample   += 1;
-        }
-
-        global_secondary_buffer.Unlock(global_secondary_buffer,
-                                       region1, region1_size,
-                                       region2, region2_size);
+win32_unload_game_code :: (game_code: *Win32_Game_Code) {
+    if game_code.game_code_dll {
+        while FreeLibrary(game_code.game_code_dll) != 0 {};
+        game_code.game_code_dll = null;
     }
+
+    success := file_delete("handmade_temp.dll");
+    if !success {
+        print("Failed to delete file %\n", "handmade_temp.dll");
+    }
+
+    game_code.is_valid = false;
+    game_code.update_and_render = game_update_and_render_stub;
+    game_code.get_sound_samples = game_get_sound_samples_stub;
 }
 
 
@@ -584,6 +536,29 @@ win32_process_pending_messages :: (keyboard_controller: *Game_Controller_Input) 
                 DispatchMessageA(*message);
         }
     }
+}
+
+
+win32_resize_dib_section :: (buffer: *Win32_Offscreen_Buffer, width: s32, height: s32) {
+    if buffer.memory {
+        VirtualFree(buffer.memory, 0, MEM_RELEASE);
+    }
+
+    bytes_per_pixel: s32 = 4;
+    buffer.bytes_per_pixel = bytes_per_pixel;
+    buffer.width = width;
+    buffer.height = height;
+    buffer.pitch = buffer.width * bytes_per_pixel;
+
+    buffer.info.bmiHeader.biSize = size_of(BITMAPINFOHEADER);
+    buffer.info.bmiHeader.biWidth = buffer.width;
+    buffer.info.bmiHeader.biHeight = -buffer.height; // Negative value for top-down pitch
+    buffer.info.bmiHeader.biPlanes = 1;
+    buffer.info.bmiHeader.biBitCount = 32;
+    buffer.info.bmiHeader.biCompression = BI_RGB;
+
+    bitmap_memory_size := bytes_per_pixel * buffer.width * buffer.height;
+    buffer.memory = VirtualAlloc(null, xx bitmap_memory_size, MEM_COMMIT, PAGE_READWRITE);
 }
 
 
@@ -713,20 +688,22 @@ main :: () {
 
                 last_counter: s64 = win32_get_wall_clock();
                 flip_wall_clock: s64 = win32_get_wall_clock();
-                last_cycle_count: u64 = rdtsc();
 
                 global_running = true;
 
-                #if HANDMADE_INTERNAL == -1 {
-                    // NOTE(nahua): This tests the PlayCursor/WriteCursor update frequency
-                    while global_running {
-                        play_cursor:  s32;
-                        write_cursor: s32;
-                        global_secondary_buffer.GetCurrentPosition(global_secondary_buffer, *play_cursor, *write_cursor);
-                        print("PC:% WC:%\n", play_cursor, write_cursor);
-                    }
-                }
+                game: Win32_Game_Code = win32_load_game_code();
+                load_counter: s64 = 0;
+
+                last_cycle_count: u64 = rdtsc();
                 while global_running {
+                    load_counter += 1;
+
+                    if load_counter > 120 {
+                        win32_unload_game_code(*game);
+                        game = win32_load_game_code();
+                        load_counter = 0;
+                    }
+
                     old_keyboard_controller: *Game_Controller_Input = get_controller(old_input, 0);
                     new_keyboard_controller: *Game_Controller_Input = get_controller(new_input, 0);
                     empty_keyboard_controller: Game_Controller_Input;
@@ -817,7 +794,7 @@ main :: () {
                         buffer.width  = global_back_buffer.width;
                         buffer.height = global_back_buffer.height;
                         buffer.pitch  = global_back_buffer.pitch;
-                        game_update_and_render(memory=*game_memory, input=new_input, buffer=*buffer);
+                        game.update_and_render(memory=*game_memory, input=new_input, buffer=*buffer);
 
                         audio_wall_clock: s64 = win32_get_wall_clock();
                         from_begin_to_audio_seconds: float32 = win32_get_seconds_elapsed(flip_wall_clock, audio_wall_clock);
@@ -891,7 +868,7 @@ main :: () {
                             sound_buffer.samples_per_second = sound_output.samples_per_second;
                             sound_buffer.sample_count = bytes_to_write / sound_output.bytes_per_sample;
                             sound_buffer.samples = samples;
-                            game_get_sound_samples(memory=*game_memory, sound_buffer=*sound_buffer);
+                            game.get_sound_samples(memory=*game_memory, sound_buffer=*sound_buffer);
                             win32_fill_sound_buffer(*sound_output, byte_to_lock, bytes_to_write, *sound_buffer);
 
                             #if HANDMADE_INTERNAL == 1 {
@@ -912,9 +889,9 @@ main :: () {
                                 audio_latency_bytes: s32 = unwrapped_write_cursor - play_cursor;
                                 audio_latency_seconds: float32 = ((cast(float32) audio_latency_bytes / cast(float32) sound_output.bytes_per_sample)
                                                                   / cast(float32) sound_output.samples_per_second);
-                                print("BTL:% TC:% BTW:% - PC:% WC:% DELTA:%\n",
-                                      byte_to_lock, target_cursor, bytes_to_write,
-                                      play_cursor, write_cursor, audio_latency_bytes);
+                                // print("BTL:% TC:% BTW:% - PC:% WC:% DELTA:%\n",
+                                //       byte_to_lock, target_cursor, bytes_to_write,
+                                //       play_cursor, write_cursor, audio_latency_bytes);
                             }
                         } else {
                             // GetCurrentPosition didn't succeed
