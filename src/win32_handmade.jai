@@ -67,11 +67,13 @@ Win32_Debug_Time_Marker :: struct {
 
 
 Win32_Game_Code :: struct {
-    game_code_dll:          HMODULE;
-    update_and_render: Game_Update_And_Render;
-    get_sound_samples: Game_Get_Sound_Samples;
+    game_code_dll:        HMODULE;
+    dll_last_write_time:  FILETIME;
 
-    is_valid:               bool;
+    update_and_render:    Game_Update_And_Render;
+    get_sound_samples:    Game_Get_Sound_Samples;
+
+    is_valid:             bool;
 }
 
 
@@ -401,15 +403,32 @@ win32_init_dsound :: (window: HWND, samples_per_second: s32, secondary_buffer_si
 }
 
 
-win32_load_game_code :: () -> Win32_Game_Code {
-    result: Win32_Game_Code;
+win32_get_last_write_time :: (filename: string) -> FILETIME {
+    last_write_time: FILETIME;
 
-    success := copy_file("handmade.dll", "handmade_temp.dll");
-    if !success {
-        print("Failed to copy file % to %\n", "handmade.dll", "handmade_temp.dll");
+    find_data: WIN32_FIND_DATAA;
+    c_filename := temp_c_string(filename);
+    find_handle := FindFirstFileA(c_filename, *find_data);
+
+    if find_handle != INVALID_HANDLE_VALUE {
+        last_write_time = find_data.ftLastWriteTime;
+        FindClose(find_handle);
     }
 
-    result.game_code_dll = LoadLibraryA("handmade_temp.dll");
+    return last_write_time;
+}
+
+
+win32_load_game_code :: (source_dll_name: string, temp_dll_name: string) -> Win32_Game_Code {
+    result: Win32_Game_Code;
+
+    result.dll_last_write_time = win32_get_last_write_time(source_dll_name);
+
+    success := copy_file(source_dll_name, temp_dll_name);
+    if !success {
+        print("Failed to copy file % to %\n", source_dll_name, temp_dll_name);
+    }
+    result.game_code_dll = LoadLibraryA(temp_dll_name.data);
 
     if result.game_code_dll {
         result.update_and_render = GetProcAddress(result.game_code_dll, "game_update_and_render");
@@ -431,10 +450,10 @@ win32_unload_game_code :: (game_code: *Win32_Game_Code) {
         game_code.game_code_dll = null;
     }
 
-    success := file_delete("handmade_temp.dll");
-    if !success {
-        print("Failed to delete file %\n", "handmade_temp.dll");
-    }
+    // success := file_delete("handmade_temp.dll");
+    // if !success {
+    //     print("Failed to delete file %\n", "handmade_temp.dll");
+    // }
 
     game_code.is_valid = false;
     game_code.update_and_render = game_update_and_render_stub;
@@ -603,10 +622,50 @@ win32_window_callback :: (window: HWND, message: u32, wParam: WPARAM, lParam: LP
 }
 
 
+cat_strings :: (source_a: string, source_b: string, dest: []u8) {
+    // TODO(casey): Dest bounds checking!
+
+    dest_index := 0;
+
+    for i: 0..source_a.count-1 {
+        dest[dest_index] = source_a[i];
+        dest_index += 1;
+    }
+
+    for i: 0..source_b.count-1 {
+        dest[dest_index] = source_b[i];
+        dest_index += 1;
+    }
+}
+
+
 /*
 main corresponds to WinMain.
 */
 main :: () {
+    // NOTE(nahua): We use u8 with GetModuleFileNameA for ANSI (GetModuleFileNameW is for Unicode/Wide)
+    exe_filename: [MAX_PATH]u8;
+    size_of_filename := GetModuleFileNameA(null, exe_filename.data, exe_filename.count);
+
+    last_slash_index: s64;
+    for 0..exe_filename.count-1 {
+        if exe_filename[it] == #char "\\" {
+            last_slash_index = it;
+        }
+    }
+    path_prefix: string;
+    path_prefix.data = exe_filename.data;
+    path_prefix.count = last_slash_index + 1;
+
+    source_game_code_dll_filename := "handmade.dll";
+    temp_game_code_dll_filename := "handmade_temp.dll";
+    source_game_code_dll_full_path : [MAX_PATH]u8;
+    temp_game_code_dll_full_path : [MAX_PATH]u8;
+    cat_strings(path_prefix, source_game_code_dll_filename, source_game_code_dll_full_path);
+    cat_strings(path_prefix, temp_game_code_dll_filename, temp_game_code_dll_full_path);
+    source_dll_name := to_string(source_game_code_dll_full_path.data);
+    temp_dll_name := to_string(temp_game_code_dll_full_path.data);
+
     perf_count_frequency_result: s64;
     QueryPerformanceFrequency(*perf_count_frequency_result);
     global_perf_count_frequency = perf_count_frequency_result;
@@ -691,17 +750,16 @@ main :: () {
 
                 global_running = true;
 
-                game: Win32_Game_Code = win32_load_game_code();
-                load_counter: s64 = 0;
+                game: Win32_Game_Code = win32_load_game_code(source_dll_name, temp_dll_name);
 
                 last_cycle_count: u64 = rdtsc();
                 while global_running {
-                    load_counter += 1;
+                    new_dll_write_time: FILETIME = win32_get_last_write_time(source_dll_name);
 
-                    if load_counter > 120 {
+                    if (CompareFileTime(*new_dll_write_time, *game.dll_last_write_time)) {
+                        game.dll_last_write_time = new_dll_write_time;
                         win32_unload_game_code(*game);
-                        game = win32_load_game_code();
-                        load_counter = 0;
+                        game = win32_load_game_code(source_dll_name, temp_dll_name);
                     }
 
                     old_keyboard_controller: *Game_Controller_Input = get_controller(old_input, 0);

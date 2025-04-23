@@ -15,8 +15,11 @@ Run the following commands:
 
 ```shell
 # To build, run:
-jai build.jai
+jai build.jai - --internal
 
 # To run:
 ./win32_handmade.exe
+
+# For building DLL for hot-reloading:
+jai build.jai - --dll-only --internal
 ```
