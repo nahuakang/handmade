@@ -1,4 +1,5 @@
 .build/
+foo.hmi
 handmade.dll
 handmade.exp
 handmade.lib

@@ -31,6 +31,28 @@ game_output_sound :: (sound_buffer: *Game_Sound_Output_Buffer, tone_hz: s32) {
 }
 
 
+render_player :: (buffer: *Game_Offscreen_Buffer, player_x: s32, player_y: s32) {
+    end_of_buffer := cast(*u8) buffer.memory + buffer.pitch * buffer.height;
+
+    color: u32 = 0xFFFFFFFF;
+    left   := player_x;
+    right  := player_x + 10;
+    top    := player_y;
+    bottom := player_y + 10;
+
+    for x: left..right-1 {
+        pixel := cast(*u8) buffer.memory + x * buffer.bytes_per_pixel + top * buffer.pitch;
+
+        for y: top..bottom-1 {
+            if (pixel >= buffer.memory) && ((pixel + 4) <= end_of_buffer) {
+                << (cast(*u32) pixel) = color;
+            }
+            pixel += buffer.pitch;
+        }
+    }
+}
+
+
 render_weird_gradient :: (buffer: *Game_Offscreen_Buffer, x_offset: s32, y_offset: s32) {
     row := cast(*u8) buffer.memory;
 
@@ -79,6 +101,9 @@ game_update_and_render :: (memory: *Game_Memory, input: *Game_Input, buffer: *Ga
         }
 
         game_state.tone_hz       = 256;
+        game_state.player_x      = 100;
+        game_state.player_y      = 100;
+
         memory.is_initialized    = true;
     }
 
@@ -98,10 +123,17 @@ game_update_and_render :: (memory: *Game_Memory, input: *Game_Input, buffer: *Ga
             }
         }
 
-        if controller.action_down.ended_down {
-            game_state.y_offset += 1;
+        game_state.player_x += cast(s32)(4.0 * controller.stick_average_x);
+        game_state.player_y -= cast(s32)(4.0 * controller.stick_average_y);
+        if game_state.jump >0 {
+            game_state.player_y += cast(s32)(5.0 * sin(0.5 * PI * game_state.jump));
         }
+        if controller.action_down.ended_down {
+            game_state.jump = 4.0;
+        }
+        game_state.jump -= 0.033;
     }
 
     render_weird_gradient(buffer, game_state.x_offset, game_state.y_offset);
+    render_player(buffer, game_state.player_x, game_state.player_y);
 }

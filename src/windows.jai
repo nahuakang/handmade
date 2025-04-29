@@ -20,6 +20,13 @@ VK_W :: 0x57;
 
 
 /*
+DWORD dwFlags for SetLayeredWindowAttributes
+*/
+LWA_ALPHA :: 0x00000002;
+LWA_COLORKEY :: 0x00000001;
+
+
+/*
 Win32: Missing winerror
 https://learn.microsoft.com/en-us/windows/win32/debug/system-error-codes--0-499-
 */
@@ -64,3 +71,7 @@ EndPaint :: (hWnd: HWND, lpPaint: *PAINTSTRUCT) -> HDC #foreign user32;
 GetMessageA :: (msg: *MSG, hWnd: HWND, wMsgFilterMin: u32, wMsgFilterMax: u32) -> BOOL #foreign user32;
 PatBlt :: (hdc: HDC, x: s32, y: s32, w: s32, h: s32, rop: DWORD) -> BOOL #foreign gdi;
 StretchDIBits :: (hdc: HDC, xDest: s32, yDest: s32, DestWidth: s32, DestHeight: s32, xSrc: s32, ySrc: s32, SrcWidth: s32, SrcHeight: s32, lpBits: *void, lpbmi: *BITMAPINFO, iUsage: u32, rop: ROP) -> s32 #foreign gdi;
+// Using DWORD instead of COLORREF (typedef DWORD COLORREF); See: https://learn.microsoft.com/en-us/windows/win32/gdi/colorref
+// Using u8 for BYTE; See: https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setlayeredwindowattributes
+// Windows module defines BOOL as: BOOL    :: enum s32 { FALSE :: 0; TRUE :: 1; }
+SetLayeredWindowAttributes :: (hWnd: HWND, crKey: DWORD, bAlpha: u8, dwFlags: DWORD) -> BOOL #foreign user32;

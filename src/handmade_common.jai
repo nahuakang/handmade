@@ -108,10 +108,11 @@ Game Structs
 */
 
 Game_Offscreen_Buffer :: struct {
-    memory: *void;
-    width:  s32;
-    height: s32;
-    pitch:  s32;
+    memory:          *void;
+    width:           s32;
+    height:          s32;
+    pitch:           s32;
+    bytes_per_pixel: s32;
 }
 
 
@@ -183,6 +184,11 @@ Game_State :: struct {
     tone_hz:  s32;
     x_offset: s32;
     y_offset: s32;
+
+    // TODO(nahua): Throwaway
+    player_x: s32;
+    player_y: s32;
+    jump:     float32;
 }
 
 

@@ -90,12 +90,6 @@ Win32_Offscreen_Buffer :: struct {
 }
 
 
-Win32_Window_Dimension :: struct {
-    width:  s32;
-    height: s32;
-}
-
-
 Win32_Sound_Output :: struct {
     samples_per_second:    s32;
     bytes_per_sample:      s32;
@@ -103,6 +97,24 @@ Win32_Sound_Output :: struct {
     running_sample_index:  s32;
     safety_bytes:          s32;
     // TODO(nahua): Math gets simpler if we add a "bytes per second" field?
+}
+
+
+Win32_State :: struct {
+    total_size:            u64;
+    game_memory_block:     *void;
+
+    recording_handle:      HANDLE;
+    input_recording_index: s32;
+
+    playback_handle:       HANDLE;
+    input_playing_index:   s32;
+}
+
+
+Win32_Window_Dimension :: struct {
+    width:  s32;
+    height: s32;
 }
 
 
@@ -489,7 +501,7 @@ win32_process_keyboard_message :: (new_state: *Game_Button_State, is_down: bool)
 }
 
 
-win32_process_pending_messages :: (keyboard_controller: *Game_Controller_Input) {
+win32_process_pending_messages :: (win32_state: *Win32_State, keyboard_controller: *Game_Controller_Input) {
     message: MSG;
     while PeekMessageA(*message, null, 0, 0, PM_REMOVE) {
         if message.message == {
@@ -542,6 +554,16 @@ win32_process_pending_messages :: (keyboard_controller: *Game_Controller_Input) 
                     #if HANDMADE_INTERNAL == 1 {
                         if keycode == #char "P" {
                             if is_down then global_pause = !global_pause;
+                        } else if keycode == #char "L" {
+                            if is_down {
+                                if win32_state.input_recording_index == 0 {
+                                    win32_begin_recording_input(win32_state, 1);
+                                }
+                                else {
+                                    win32_end_recording_input(win32_state);
+                                    win32_begin_input_playback(win32_state, 1);
+                                }
+                            }
                         }
                     }
 
@@ -553,6 +575,71 @@ win32_process_pending_messages :: (keyboard_controller: *Game_Controller_Input) 
             case;
                 TranslateMessage(*message);
                 DispatchMessageA(*message);
+        }
+    }
+}
+
+
+win32_begin_recording_input :: (state: *Win32_State, input_recording_index: s32) {
+    state.input_recording_index = input_recording_index;
+    // TODO(nahua): These files must go in a temporary/build directory!!!!
+    // TODO(nahua): Lazily write the giant memory block and use a memory copy instead?
+
+    filename: string = "foo.hmi";
+    state.recording_handle = CreateFileA(filename=filename.data,
+                                         desired_access=GENERIC_WRITE,
+                                         share_mode=0x0,
+                                         creation=CREATE_ALWAYS);
+
+    bytes_to_write: DWORD = cast(DWORD) state.total_size;
+    assert(state.total_size == bytes_to_write);
+    bytes_written: DWORD;
+    WriteFile(state.recording_handle, state.game_memory_block, bytes_to_write, *bytes_written, null);
+}
+
+
+win32_end_recording_input :: (state: *Win32_State) {
+    CloseHandle(state.recording_handle);
+    state.input_recording_index = 0;
+}
+
+
+win32_begin_input_playback :: (state: *Win32_State, input_playback_index: s32) {
+    state.input_playing_index = input_playback_index;
+
+    filename: string = "foo.hmi";
+    state.playback_handle = CreateFileA(filename=filename.data,
+                                        desired_access=GENERIC_READ,
+                                        share_mode=FILE_SHARE_READ,
+                                        creation=OPEN_EXISTING);
+    bytes_to_read: DWORD = cast(DWORD)state.total_size; //u32
+    assert(state.total_size == bytes_to_read);
+    bytes_read: DWORD;
+    ReadFile(state.playback_handle, state.game_memory_block, bytes_to_read, *bytes_read);
+}
+
+
+win32_end_input_playback :: (state: *Win32_State) {
+    CloseHandle(state.playback_handle);
+    state.input_playing_index = 0;
+}
+
+
+win32_record_input :: (state: *Win32_State, input: *Game_Input) {
+    bytes_written: DWORD; // u32
+    WriteFile(state.recording_handle, input, size_of(Game_Input), *bytes_written, null);
+}
+
+
+win32_playback_input :: (state: *Win32_State, input: *Game_Input) {
+    bytes_read: DWORD; // u32
+    if ReadFile(state.playback_handle, input, size_of(Game_Input), *bytes_read) {
+        if bytes_read == 0 {
+            // NOTE(nahua): We've hit the end of the stream, go back to the beginning
+            playing_index: s32 = state.input_playing_index;
+            win32_end_input_playback(state);
+            win32_begin_input_playback(state, playing_index);
+            ReadFile(state.playback_handle, input, size_of(Game_Input), *bytes_read);
         }
     }
 }
@@ -589,7 +676,14 @@ win32_window_callback :: (window: HWND, message: u32, wParam: WPARAM, lParam: LP
 
     if message == {
         case WM_ACTIVATEAPP;
-            push_context{ print("WM_ACTIVATEAPP\n"); }
+            push_context{
+                print("WM_ACTIVATEAPP\n");
+                if wParam == 1 {
+                    SetLayeredWindowAttributes(window, 0x00000000, 255, LWA_ALPHA);
+                } else {
+                    SetLayeredWindowAttributes(window, 0x00000000, 64, LWA_ALPHA);
+                }
+            }
         case WM_CLOSE;
             push_context{ print("WM_CLOSE\n"); }
             global_running = false;
@@ -680,7 +774,7 @@ main :: () {
 
     window_class: WNDCLASSEXW;
     window_class.cbSize = size_of(WNDCLASSEXW);
-    window_class.style = CS_HREDRAW | CS_VREDRAW | CS_OWNDC;
+    window_class.style = CS_HREDRAW | CS_VREDRAW;
     window_class.cbClsExtra = 0;
     window_class.cbWndExtra = 0;
     window_class.lpfnWndProc = xx win32_window_callback;
@@ -691,7 +785,7 @@ main :: () {
     target_seconds_per_frame: float32 = 1.0 / cast(float32) GAME_UPDATE_HZ;
 
     if RegisterClassExW(*window_class) {
-        window := CreateWindowExW(0,
+        window := CreateWindowExW(WS_EX_TOPMOST|WS_EX_LAYERED,
                                   window_class.lpszClassName,
                                   utf8_to_wide(WINDOW_NAME),
                                   WS_OVERLAPPEDWINDOW | WS_VISIBLE,
@@ -705,9 +799,10 @@ main :: () {
                                   null);
 
         if window {
-            // NOTE(nahua): Since we specified CS_OWNDC, we can just get one
-            // device context and use it forever because we're not sharing it.
-            device_context := GetDC(window);
+            win32_state: Win32_State  = Win32_State.{
+                input_recording_index = 0,
+                input_playing_index   = 0,
+            };
 
             sound_output: Win32_Sound_Output;
             sound_output.samples_per_second    = 48000;
@@ -731,9 +826,12 @@ main :: () {
             game_memory: Game_Memory;
             game_memory.permanent_storage_size = Megabytes(cast(u64) 64);
             game_memory.transient_storage_size = Gigabytes(cast(u64) 1);
-            total_storage_size: u64            = game_memory.permanent_storage_size + game_memory.transient_storage_size;
-            game_memory.permanent_storage      = VirtualAlloc(BASE_ADDRESS, xx total_storage_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-            game_memory.transient_storage      = cast(*void) (cast(u64) game_memory.permanent_storage) + game_memory.permanent_storage_size;
+
+            // TODO(nahua): Handle various memory footprints (USING SYSTEM METRICS)
+            win32_state.total_size        = game_memory.permanent_storage_size + game_memory.transient_storage_size;
+            win32_state.game_memory_block = VirtualAlloc(BASE_ADDRESS, xx win32_state.total_size, MEM_RESERVE|MEM_COMMIT, PAGE_READWRITE);
+            game_memory.permanent_storage = win32_state.game_memory_block;
+            game_memory.transient_storage = cast(*void) (cast(u64) game_memory.permanent_storage) + game_memory.permanent_storage_size;
 
             if samples && game_memory.permanent_storage && game_memory.transient_storage {
                 input: [2]Game_Input;
@@ -772,9 +870,25 @@ main :: () {
                         new_keyboard_controller.buttons[button_index].ended_down = old_keyboard_controller.buttons[button_index].ended_down;
                     }
 
-                    win32_process_pending_messages(new_keyboard_controller);
+                    win32_process_pending_messages(*win32_state, new_keyboard_controller);
 
                     if !global_pause {
+                        // TODO(nahua): REMOVE THIS BLOCK LATER
+                        // NOTE(nahua): For debugging with keyboard controls without controller
+                        if new_keyboard_controller.move_up.ended_down {
+                            new_keyboard_controller.stick_average_y = 1.0;
+                        }
+                        if new_keyboard_controller.move_down.ended_down {
+                            new_keyboard_controller.stick_average_y = -1.0;
+                        }
+                        if new_keyboard_controller.move_left.ended_down {
+                            new_keyboard_controller.stick_average_x = -1.0;
+                        }
+                        if new_keyboard_controller.move_right.ended_down {
+                            new_keyboard_controller.stick_average_x = 1.0;
+                        }
+                        // TODO(nahua): REMOVE THIS BLOCK LATER
+
                         // TODO(nahua): Need to not poll disconnected controllers to avoid
                         // xinput frame rate hit on older libraries...
                         // TODO(nahua): Should we poll this more frequently
@@ -852,6 +966,13 @@ main :: () {
                         buffer.width  = global_back_buffer.width;
                         buffer.height = global_back_buffer.height;
                         buffer.pitch  = global_back_buffer.pitch;
+                        buffer.bytes_per_pixel = global_back_buffer.bytes_per_pixel;
+                        if win32_state.input_recording_index {
+                            win32_record_input(*win32_state, new_input);
+                        }
+                        if win32_state.input_playing_index {
+                            win32_playback_input(*win32_state, new_input);
+                        }
                         game.update_and_render(memory=*game_memory, input=new_input, buffer=*buffer);
 
                         audio_wall_clock: s64 = win32_get_wall_clock();
@@ -995,10 +1116,12 @@ main :: () {
                                                      *sound_output,
                                                      target_seconds_per_frame);
                         }
+                        device_context := GetDC(window);
                         win32_display_buffer_in_window(device_context,
                                                     dimension.width,
                                                     dimension.height,
                                                     *global_back_buffer);
+                        ReleaseDC(window, device_context);
                         flip_wall_clock = win32_get_wall_clock();
 
                         #if HANDMADE_INTERNAL == 1 {
