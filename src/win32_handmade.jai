@@ -70,6 +70,8 @@ Win32_Game_Code :: struct {
     game_code_dll:        HMODULE;
     dll_last_write_time:  FILETIME;
 
+    // IMPORTANT(nahua): Either of the callbacks can be null!
+    // We must check before calling.
     update_and_render:    Game_Update_And_Render;
     get_sound_samples:    Game_Get_Sound_Samples;
 
@@ -100,6 +102,9 @@ Win32_Sound_Output :: struct {
 }
 
 
+Win32_State_Filename_Count :: MAX_PATH;
+
+
 Win32_State :: struct {
     total_size:            u64;
     game_memory_block:     *void;
@@ -109,6 +114,9 @@ Win32_State :: struct {
 
     playback_handle:       HANDLE;
     input_playing_index:   s32;
+
+    exe_filename:          [Win32_State_Filename_Count]u8;
+    module_path_prefix:    string; // NOTE(nahua): Casey uses OnePastLastEXEFileNameSlash
 }
 
 
@@ -140,6 +148,45 @@ WINDOW_NAME             :: "Handmade Hero";
 /*
 Handmade Hero Win32 System-Related Procedures
 */
+cat_strings :: (source_a: string, source_b: string, dest: []u8) {
+    // TODO(casey): Dest bounds checking!
+
+    dest_index := 0;
+
+    for i: 0..source_a.count-1 {
+        dest[dest_index] = source_a[i];
+        dest_index += 1;
+    }
+
+    for i: 0..source_b.count-1 {
+        dest[dest_index] = source_b[i];
+        dest_index += 1;
+    }
+}
+
+
+win32_build_exe_path_filename :: (state: *Win32_State, filename: string, dest: []u8) {
+    cat_strings(state.module_path_prefix, filename, dest);
+}
+
+
+win32_get_exe_filename :: (state: *Win32_State) {
+    // NOTE(nahua): We use u8 with GetModuleFileNameA for ANSI (GetModuleFileNameW is for Unicode/Wide)
+    // exe_filename will be: C:\Users\kangn\projects\personal\handmade\win32_handmade.exe
+    size := GetModuleFileNameA(null, state.exe_filename.data, state.exe_filename.count);
+
+    last_slash_index: s64;
+    for 0..state.exe_filename.count-1 {
+        if state.exe_filename[it] == #char "\\" {
+            last_slash_index = it;
+        }
+    }
+
+    state.module_path_prefix.count = last_slash_index + 1;
+    state.module_path_prefix.data = state.exe_filename.data;
+}
+
+
 win32_clear_buffer :: (sound_output: *Win32_Sound_Output) {
     region1, region2: *void;
     region1_size, region2_size: s32;
@@ -266,8 +313,11 @@ win32_draw_sound_buffer_marker :: (back_buffer: *Win32_Offscreen_Buffer,
 
 
 win32_display_buffer_in_window :: (device_context: HDC, window_width: s32, window_height: s32, buffer: *Win32_Offscreen_Buffer) {
+    // NOTE(nahua): For prototyping purposes, we're going to always blit
+    // 1-to-1 pixels to make sure we don't introduce artifacts with
+    // strecthing while we are learning to code the renderer.
     StretchDIBits(device_context,
-                  0, 0, window_width, window_height, // Destination (window)
+                  0, 0, buffer.width, buffer.height, // window_width, window_height, // Destination (window)
                   0, 0, buffer.width, buffer.height, // Source (bitmap buffer)
                   buffer.memory,
                   *buffer.info,
@@ -417,14 +467,11 @@ win32_init_dsound :: (window: HWND, samples_per_second: s32, secondary_buffer_si
 
 win32_get_last_write_time :: (filename: string) -> FILETIME {
     last_write_time: FILETIME;
-
-    find_data: WIN32_FIND_DATAA;
     c_filename := temp_c_string(filename);
-    find_handle := FindFirstFileA(c_filename, *find_data);
 
-    if find_handle != INVALID_HANDLE_VALUE {
-        last_write_time = find_data.ftLastWriteTime;
-        FindClose(find_handle);
+    data: WIN32_FILE_ATTRIBUTE_DATA;
+    if GetFileAttributesExA(c_filename, GetFileExInfoStandard, *data) {
+        last_write_time = data.ftLastWriteTime;
     }
 
     return last_write_time;
@@ -449,8 +496,8 @@ win32_load_game_code :: (source_dll_name: string, temp_dll_name: string) -> Win3
     }
 
     if !result.is_valid {
-        result.update_and_render = game_update_and_render_stub;
-        result.get_sound_samples = game_get_sound_samples_stub;
+        result.update_and_render = null;
+        result.get_sound_samples = null;
     }
     return result;
 }
@@ -468,8 +515,8 @@ win32_unload_game_code :: (game_code: *Win32_Game_Code) {
     // }
 
     game_code.is_valid = false;
-    game_code.update_and_render = game_update_and_render_stub;
-    game_code.get_sound_samples = game_get_sound_samples_stub;
+    game_code.update_and_render = null;
+    game_code.get_sound_samples = null;
 }
 
 
@@ -580,12 +627,21 @@ win32_process_pending_messages :: (win32_state: *Win32_State, keyboard_controlle
 }
 
 
+win32_get_input_file_location :: (state: *Win32_State, slot_index: s32, dest: []u8) {
+    assert(slot_index == 1);
+    win32_build_exe_path_filename(state, "loop_edit.hmi", dest);
+}
+
+
 win32_begin_recording_input :: (state: *Win32_State, input_recording_index: s32) {
     state.input_recording_index = input_recording_index;
     // TODO(nahua): These files must go in a temporary/build directory!!!!
     // TODO(nahua): Lazily write the giant memory block and use a memory copy instead?
 
-    filename: string = "foo.hmi";
+    filename_array : [Win32_State_Filename_Count]u8;
+    win32_get_input_file_location(state, input_recording_index, filename_array);
+    filename := to_string(filename_array.data);
+    print("!!!!! win32_begin_recording_input - filename: %\n", filename);
     state.recording_handle = CreateFileA(filename=filename.data,
                                          desired_access=GENERIC_WRITE,
                                          share_mode=0x0,
@@ -676,6 +732,8 @@ win32_window_callback :: (window: HWND, message: u32, wParam: WPARAM, lParam: LP
 
     if message == {
         case WM_ACTIVATEAPP;
+        // NOTE(nahua): Day 24 - Disabling layering functionality
+        #if HANDMADE_INTERNAL == -1 {
             push_context{
                 print("WM_ACTIVATEAPP\n");
                 if wParam == 1 {
@@ -684,6 +742,7 @@ win32_window_callback :: (window: HWND, message: u32, wParam: WPARAM, lParam: LP
                     SetLayeredWindowAttributes(window, 0x00000000, 64, LWA_ALPHA);
                 }
             }
+        }
         case WM_CLOSE;
             push_context{ print("WM_CLOSE\n"); }
             global_running = false;
@@ -716,48 +775,22 @@ win32_window_callback :: (window: HWND, message: u32, wParam: WPARAM, lParam: LP
 }
 
 
-cat_strings :: (source_a: string, source_b: string, dest: []u8) {
-    // TODO(casey): Dest bounds checking!
-
-    dest_index := 0;
-
-    for i: 0..source_a.count-1 {
-        dest[dest_index] = source_a[i];
-        dest_index += 1;
-    }
-
-    for i: 0..source_b.count-1 {
-        dest[dest_index] = source_b[i];
-        dest_index += 1;
-    }
-}
-
-
 /*
 main corresponds to WinMain.
 */
 main :: () {
-    // NOTE(nahua): We use u8 with GetModuleFileNameA for ANSI (GetModuleFileNameW is for Unicode/Wide)
-    exe_filename: [MAX_PATH]u8;
-    size_of_filename := GetModuleFileNameA(null, exe_filename.data, exe_filename.count);
+    win32_state: Win32_State;
+    win32_get_exe_filename(*win32_state);
+    print("!!!exe_filename: %\n", to_string(win32_state.exe_filename.data));
 
-    last_slash_index: s64;
-    for 0..exe_filename.count-1 {
-        if exe_filename[it] == #char "\\" {
-            last_slash_index = it;
-        }
-    }
-    path_prefix: string;
-    path_prefix.data = exe_filename.data;
-    path_prefix.count = last_slash_index + 1;
-
-    source_game_code_dll_filename := "handmade.dll";
-    temp_game_code_dll_filename := "handmade_temp.dll";
-    source_game_code_dll_full_path : [MAX_PATH]u8;
-    temp_game_code_dll_full_path : [MAX_PATH]u8;
-    cat_strings(path_prefix, source_game_code_dll_filename, source_game_code_dll_full_path);
-    cat_strings(path_prefix, temp_game_code_dll_filename, temp_game_code_dll_full_path);
+    source_game_code_dll_full_path : [Win32_State_Filename_Count]u8;
+    win32_build_exe_path_filename(*win32_state, "handmade.dll", source_game_code_dll_full_path);
+    // source_dll_name: C:\Users\kangn\projects\personal\handmade\handmade.dll
     source_dll_name := to_string(source_game_code_dll_full_path.data);
+
+    temp_game_code_dll_full_path : [Win32_State_Filename_Count]u8;
+    win32_build_exe_path_filename(*win32_state, "handmade_temp.dll", temp_game_code_dll_full_path);
+    // temp_dll_name: C:\Users\kangn\projects\personal\handmade\handmade_temp.dll
     temp_dll_name := to_string(temp_game_code_dll_full_path.data);
 
     perf_count_frequency_result: s64;
@@ -785,7 +818,7 @@ main :: () {
     target_seconds_per_frame: float32 = 1.0 / cast(float32) GAME_UPDATE_HZ;
 
     if RegisterClassExW(*window_class) {
-        window := CreateWindowExW(WS_EX_TOPMOST|WS_EX_LAYERED,
+        window := CreateWindowExW(0, //WS_EX_TOPMOST|WS_EX_LAYERED,
                                   window_class.lpszClassName,
                                   utf8_to_wide(WINDOW_NAME),
                                   WS_OVERLAPPEDWINDOW | WS_VISIBLE,
@@ -799,11 +832,6 @@ main :: () {
                                   null);
 
         if window {
-            win32_state: Win32_State  = Win32_State.{
-                input_recording_index = 0,
-                input_playing_index   = 0,
-            };
-
             sound_output: Win32_Sound_Output;
             sound_output.samples_per_second    = 48000;
             sound_output.bytes_per_sample      = size_of(s16) * 2;
@@ -907,7 +935,7 @@ main :: () {
                             if result == ERROR_SUCCESS {
                                 // NOTE(nahua): This controller is plugged in
                                 new_controller.is_connected = true;
-                                new_controller.is_analog = true;
+                                new_controller.is_analog = old_controller.is_analog;
 
                                 pad :=     state.Gamepad;
                                 buttons := state.Gamepad.wButtons;
@@ -973,7 +1001,8 @@ main :: () {
                         if win32_state.input_playing_index {
                             win32_playback_input(*win32_state, new_input);
                         }
-                        game.update_and_render(memory=*game_memory, input=new_input, buffer=*buffer);
+
+                        if game.update_and_render then game.update_and_render(memory=*game_memory, input=new_input, buffer=*buffer);
 
                         audio_wall_clock: s64 = win32_get_wall_clock();
                         from_begin_to_audio_seconds: float32 = win32_get_seconds_elapsed(flip_wall_clock, audio_wall_clock);
@@ -1047,7 +1076,7 @@ main :: () {
                             sound_buffer.samples_per_second = sound_output.samples_per_second;
                             sound_buffer.sample_count = bytes_to_write / sound_output.bytes_per_sample;
                             sound_buffer.samples = samples;
-                            game.get_sound_samples(memory=*game_memory, sound_buffer=*sound_buffer);
+                            if game.get_sound_samples then game.get_sound_samples(memory=*game_memory, sound_buffer=*sound_buffer);
                             win32_fill_sound_buffer(*sound_output, byte_to_lock, bytes_to_write, *sound_buffer);
 
                             #if HANDMADE_INTERNAL == 1 {

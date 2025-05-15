@@ -1,10 +1,4 @@
 .build/
-foo.hmi
-handmade.dll
-handmade.exp
-handmade.lib
-handmade.pdb
-handmade_temp.dll
+build/
+*.hmi
 test.out
-win32_handmade.exe
-win32_handmade.pdb

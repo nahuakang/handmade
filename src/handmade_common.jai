@@ -202,10 +202,6 @@ DEBUG_Platform_Write_Entire_File :: #type (filename: string, memory_size: u32, m
 
 Game_Update_And_Render :: #type (memory: *Game_Memory, input: *Game_Input, buffer: *Game_Offscreen_Buffer) -> ();
 Game_Get_Sound_Samples :: #type (memory: *Game_Memory, sound_buffer: *Game_Sound_Output_Buffer) -> ();
-game_update_and_render_stub :: (memory: *Game_Memory, input: *Game_Input, buffer: *Game_Offscreen_Buffer) {
-}
-game_get_sound_samples_stub :: (memory: *Game_Memory, sound_buffer: *Game_Sound_Output_Buffer) {
-}
 
 
 /* Functions */

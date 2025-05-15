@@ -34,6 +34,7 @@ build :: () {
 
             options := get_build_options(w);
             options.output_executable_name = "win32_handmade";
+            options.output_path = "build";
             set_optimization(*options, .DEBUG);
 
             args := options.compile_time_command_line;
@@ -58,6 +59,7 @@ build :: () {
 
         options := get_build_options();
         options.output_executable_name = "handmade";
+        options.output_path = "build";
         options.output_type            = .DYNAMIC_LIBRARY;
         set_optimization(*options, .OPTIMIZED);
 
