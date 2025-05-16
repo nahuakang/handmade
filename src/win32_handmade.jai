@@ -105,9 +105,18 @@ Win32_Sound_Output :: struct {
 Win32_State_Filename_Count :: MAX_PATH;
 
 
+Win32_Replay_Buffer :: struct {
+    file_handle:  HANDLE;
+    memory_map:   HANDLE;
+    filename:     string;
+    memory_block: *void;
+}
+
+
 Win32_State :: struct {
     total_size:            u64;
     game_memory_block:     *void;
+    replay_buffers:        [4]Win32_Replay_Buffer;
 
     recording_handle:      HANDLE;
     input_recording_index: s32;
@@ -115,7 +124,7 @@ Win32_State :: struct {
     playback_handle:       HANDLE;
     input_playing_index:   s32;
 
-    exe_filename:          [Win32_State_Filename_Count]u8;
+    exe_filename:          string;
     module_path_prefix:    string; // NOTE(nahua): Casey uses OnePastLastEXEFileNameSlash
 }
 
@@ -139,8 +148,6 @@ global_perf_count_frequency: s64;
 /*
 Handmade Hero Constants
 */
-GAME_UPDATE_HZ          :: MONITOR_REFRESH_HZ / 2;
-MONITOR_REFRESH_HZ      :: 60;
 WINDOW_CLASS_NAME       :: "HandmadeHeroWindowClass";
 WINDOW_NAME             :: "Handmade Hero";
 
@@ -148,32 +155,21 @@ WINDOW_NAME             :: "Handmade Hero";
 /*
 Handmade Hero Win32 System-Related Procedures
 */
-cat_strings :: (source_a: string, source_b: string, dest: []u8) {
-    // TODO(casey): Dest bounds checking!
-
-    dest_index := 0;
-
-    for i: 0..source_a.count-1 {
-        dest[dest_index] = source_a[i];
-        dest_index += 1;
-    }
-
-    for i: 0..source_b.count-1 {
-        dest[dest_index] = source_b[i];
-        dest_index += 1;
-    }
-}
-
-
-win32_build_exe_path_filename :: (state: *Win32_State, filename: string, dest: []u8) {
-    cat_strings(state.module_path_prefix, filename, dest);
+win32_build_exe_path_filename :: (state: *Win32_State, filename: string) -> string {
+    result := tprint("%1%2", state.module_path_prefix, filename);
+    return result;
 }
 
 
 win32_get_exe_filename :: (state: *Win32_State) {
     // NOTE(nahua): We use u8 with GetModuleFileNameA for ANSI (GetModuleFileNameW is for Unicode/Wide)
     // exe_filename will be: C:\Users\kangn\projects\personal\handmade\win32_handmade.exe
-    size := GetModuleFileNameA(null, state.exe_filename.data, state.exe_filename.count);
+    buffer: [Win32_State_Filename_Count]u8;
+    size := GetModuleFileNameA(null, buffer.data, Win32_State_Filename_Count);
+
+    assert(size > 0);
+    // NOTE(nahua): copy_string is needed from the one read in this stack frame
+    state.exe_filename = copy_string(to_string(buffer.data, size));
 
     last_slash_index: s64;
     for 0..state.exe_filename.count-1 {
@@ -238,6 +234,7 @@ win32_debug_draw_vertical :: (back_buffer: *Win32_Offscreen_Buffer, x: int, top:
 }
 
 
+#if HANDMADE_INTERNAL == -1 {
 win32_debug_sync_display :: (back_buffer: *Win32_Offscreen_Buffer,
                              marker_count: s64,
                              markers: []Win32_Debug_Time_Marker,
@@ -299,6 +296,7 @@ win32_debug_sync_display :: (back_buffer: *Win32_Offscreen_Buffer,
         win32_draw_sound_buffer_marker(back_buffer, sound_output, c, pad_x, top, bottom,
                                        this_marker.flip_write_cursor, xx write_color);
     }
+}
 }
 
 
@@ -542,9 +540,10 @@ win32_process_xinput_stick_value :: (value: s16, deadzone_threshold: s16) -> flo
 
 
 win32_process_keyboard_message :: (new_state: *Game_Button_State, is_down: bool) {
-    assert(new_state.ended_down != is_down);
-    new_state.ended_down = is_down;
-    new_state.half_transition_count += 1;
+    if new_state.ended_down != is_down {
+        new_state.ended_down = is_down;
+        new_state.half_transition_count += 1;
+    }
 }
 
 
@@ -603,12 +602,16 @@ win32_process_pending_messages :: (win32_state: *Win32_State, keyboard_controlle
                             if is_down then global_pause = !global_pause;
                         } else if keycode == #char "L" {
                             if is_down {
-                                if win32_state.input_recording_index == 0 {
-                                    win32_begin_recording_input(win32_state, 1);
-                                }
-                                else {
-                                    win32_end_recording_input(win32_state);
-                                    win32_begin_input_playback(win32_state, 1);
+                                if win32_state.input_playing_index == 0 {
+                                    if win32_state.input_recording_index == 0 {
+                                        win32_begin_recording_input(win32_state, 1);
+                                    }
+                                    else {
+                                        win32_end_recording_input(win32_state);
+                                        win32_begin_input_playback(win32_state, 1);
+                                    }
+                                } else {
+                                    win32_end_input_playback(win32_state);
                                 }
                             }
                         }
@@ -627,30 +630,37 @@ win32_process_pending_messages :: (win32_state: *Win32_State, keyboard_controlle
 }
 
 
-win32_get_input_file_location :: (state: *Win32_State, slot_index: s32, dest: []u8) {
-    assert(slot_index == 1);
-    win32_build_exe_path_filename(state, "loop_edit.hmi", dest);
+win32_get_input_file_location :: (state: *Win32_State, input_stream: bool, slot_index: s32) -> string {
+    name := tprint("loop_edit_%1_%2.hmi", slot_index, ifx input_stream then "input" else "state");
+    return win32_build_exe_path_filename(state, name);
+}
+
+
+win32_get_replay_buffer :: (state: *Win32_State, index: s32) -> *Win32_Replay_Buffer {
+    assert(index < state.replay_buffers.count);
+    result := *state.replay_buffers[index];
+    return result;
 }
 
 
 win32_begin_recording_input :: (state: *Win32_State, input_recording_index: s32) {
-    state.input_recording_index = input_recording_index;
-    // TODO(nahua): These files must go in a temporary/build directory!!!!
-    // TODO(nahua): Lazily write the giant memory block and use a memory copy instead?
+    replay_buffer := win32_get_replay_buffer(state, input_recording_index);
+    if replay_buffer.memory_block {
+        state.input_recording_index = input_recording_index;
+        filename := win32_get_input_file_location(state=state, input_stream=true, slot_index=input_recording_index);
+        state.recording_handle = CreateFileA(filename=filename.data,
+                                             desired_access=GENERIC_WRITE,
+                                             share_mode=0x0,
+                                             creation=CREATE_ALWAYS);
 
-    filename_array : [Win32_State_Filename_Count]u8;
-    win32_get_input_file_location(state, input_recording_index, filename_array);
-    filename := to_string(filename_array.data);
-    print("!!!!! win32_begin_recording_input - filename: %\n", filename);
-    state.recording_handle = CreateFileA(filename=filename.data,
-                                         desired_access=GENERIC_WRITE,
-                                         share_mode=0x0,
-                                         creation=CREATE_ALWAYS);
+        #if HANDMADE_INTERNAL == -1 {
+            file_position: LARGE_INTEGER;
+            file_position.QuadPart = xx state.total_size;
+            SetFilePointerEx(state.recording_handle, file_position.QuadPart, null, FILE_BEGIN);
+        }
 
-    bytes_to_write: DWORD = cast(DWORD) state.total_size;
-    assert(state.total_size == bytes_to_write);
-    bytes_written: DWORD;
-    WriteFile(state.recording_handle, state.game_memory_block, bytes_to_write, *bytes_written, null);
+        memcpy(replay_buffer.memory_block, state.game_memory_block, xx state.total_size);
+    }
 }
 
 
@@ -660,18 +670,24 @@ win32_end_recording_input :: (state: *Win32_State) {
 }
 
 
-win32_begin_input_playback :: (state: *Win32_State, input_playback_index: s32) {
-    state.input_playing_index = input_playback_index;
+win32_begin_input_playback :: (state: *Win32_State, input_playing_index: s32) {
+    replay_buffer := win32_get_replay_buffer(state, input_playing_index);
+    if replay_buffer.memory_block {
+        state.input_playing_index = input_playing_index;
+        filename := win32_get_input_file_location(state=state, input_stream=true, slot_index=input_playing_index);
+        state.playback_handle = CreateFileA(filename=filename.data,
+                                            desired_access=GENERIC_READ,
+                                            share_mode=0x0,
+                                            creation=OPEN_EXISTING);
 
-    filename: string = "foo.hmi";
-    state.playback_handle = CreateFileA(filename=filename.data,
-                                        desired_access=GENERIC_READ,
-                                        share_mode=FILE_SHARE_READ,
-                                        creation=OPEN_EXISTING);
-    bytes_to_read: DWORD = cast(DWORD)state.total_size; //u32
-    assert(state.total_size == bytes_to_read);
-    bytes_read: DWORD;
-    ReadFile(state.playback_handle, state.game_memory_block, bytes_to_read, *bytes_read);
+        #if HANDMADE_INTERNAL == -1 {
+            file_position: LARGE_INTEGER;
+            file_position.QuadPart = xx state.total_size;
+            SetFilePointerEx(state.playback_handle, file_position.QuadPart, null, FILE_BEGIN);
+        }
+
+        memcpy(state.game_memory_block, replay_buffer.memory_block, xx state.total_size);
+    }
 }
 
 
@@ -781,17 +797,11 @@ main corresponds to WinMain.
 main :: () {
     win32_state: Win32_State;
     win32_get_exe_filename(*win32_state);
-    print("!!!exe_filename: %\n", to_string(win32_state.exe_filename.data));
 
-    source_game_code_dll_full_path : [Win32_State_Filename_Count]u8;
-    win32_build_exe_path_filename(*win32_state, "handmade.dll", source_game_code_dll_full_path);
+    source_dll_name := win32_build_exe_path_filename(*win32_state, "handmade.dll");
     // source_dll_name: C:\Users\kangn\projects\personal\handmade\handmade.dll
-    source_dll_name := to_string(source_game_code_dll_full_path.data);
-
-    temp_game_code_dll_full_path : [Win32_State_Filename_Count]u8;
-    win32_build_exe_path_filename(*win32_state, "handmade_temp.dll", temp_game_code_dll_full_path);
+    temp_dll_name := win32_build_exe_path_filename(*win32_state, "handmade_temp.dll");
     // temp_dll_name: C:\Users\kangn\projects\personal\handmade\handmade_temp.dll
-    temp_dll_name := to_string(temp_game_code_dll_full_path.data);
 
     perf_count_frequency_result: s64;
     QueryPerformanceFrequency(*perf_count_frequency_result);
@@ -814,9 +824,6 @@ main :: () {
     window_class.hInstance = GetModuleHandleW(null);
     window_class.lpszClassName = utf8_to_wide(WINDOW_CLASS_NAME);
 
-    // TODO(nahua): How do we reliably query on this on Windows?
-    target_seconds_per_frame: float32 = 1.0 / cast(float32) GAME_UPDATE_HZ;
-
     if RegisterClassExW(*window_class) {
         window := CreateWindowExW(0, //WS_EX_TOPMOST|WS_EX_LAYERED,
                                   window_class.lpszClassName,
@@ -832,6 +839,16 @@ main :: () {
                                   null);
 
         if window {
+            monitor_refresh_hz := 60;
+            refresh_dc := GetDC(window);
+            win32_refresh_rate := GetDeviceCaps(refresh_dc, VREFRESH);
+            ReleaseDC(window, refresh_dc);
+            if win32_refresh_rate > 1 {
+                monitor_refresh_hz = win32_refresh_rate;
+            }
+            game_update_hz: s32 = cast(s32) (cast(float32)monitor_refresh_hz / 2.0);
+            target_seconds_per_frame: float32 = 1.0 / game_update_hz;
+
             sound_output: Win32_Sound_Output;
             sound_output.samples_per_second    = 48000;
             sound_output.bytes_per_sample      = size_of(s16) * 2;
@@ -839,7 +856,7 @@ main :: () {
             sound_output.running_sample_index  = 0;
             // TODO(nahua): Actually compute this variance and see
             // what the lowest reasonable value is.
-            sound_output.safety_bytes = ((sound_output.samples_per_second * sound_output.bytes_per_sample) / GAME_UPDATE_HZ) / 3;
+            sound_output.safety_bytes = ((sound_output.samples_per_second * sound_output.bytes_per_sample) / game_update_hz) / 3;
 
             win32_init_dsound(window, sound_output.samples_per_second, sound_output.secondary_buffer_size);
             win32_clear_buffer(*sound_output);
@@ -861,13 +878,34 @@ main :: () {
             game_memory.permanent_storage = win32_state.game_memory_block;
             game_memory.transient_storage = cast(*void) (cast(u64) game_memory.permanent_storage) + game_memory.permanent_storage_size;
 
+            for *replay_buffer, replay_index: win32_state.replay_buffers {
+                // TODO(nahua): Recording system still seems to take too long
+                // on record start - find out what Windows is doing and if
+                // we can speed up / defer some of that processing.
+                replay_buffer.filename = win32_get_input_file_location(state=*win32_state, input_stream=false, slot_index=cast(s32)replay_index);
+                replay_buffer.file_handle = CreateFileA(filename=replay_buffer.filename.data,
+                                                        desired_access=GENERIC_READ|GENERIC_WRITE,
+                                                        share_mode=0x0,
+                                                        creation=CREATE_ALWAYS);
+
+                max_size: LARGE_INTEGER;
+                max_size.QuadPart = cast(s64) win32_state.total_size;
+                replay_buffer.memory_map = CreateFileMappingA(replay_buffer.file_handle, null, PAGE_READWRITE, xx max_size.HighPart, xx max_size.LowPart, null);
+                replay_buffer.memory_block = MapViewOfFile(replay_buffer.memory_map, FILE_MAP_ALL_ACCESS, 0, 0, cast(u64) win32_state.total_size);
+                if replay_buffer.memory_block {
+                    // All good
+                } else {
+                    // TODO(nahua): Diagnostic
+                }
+            }
+
             if samples && game_memory.permanent_storage && game_memory.transient_storage {
                 input: [2]Game_Input;
                 old_input: *Game_Input = *input[0];
                 new_input: *Game_Input = *input[1];
 
                 debug_time_marker_index := 0;
-                debug_time_markers: [GAME_UPDATE_HZ / 2]Win32_Debug_Time_Marker;
+                debug_time_markers: [30]Win32_Debug_Time_Marker; // NOTE(nahua): 30 is game_update_hz / 2
 
                 sound_is_valid: bool;
 
@@ -901,6 +939,18 @@ main :: () {
                     win32_process_pending_messages(*win32_state, new_keyboard_controller);
 
                     if !global_pause {
+                        mouse_p: POINT;
+                        GetCursorPos(*mouse_p);
+                        ScreenToClient(window, *mouse_p);
+                        new_input.mouse_x = mouse_p.x;
+                        new_input.mouse_y = mouse_p.y;
+                        new_input.mouse_z = 0; // TODO(nahua): Support mousewheel?
+                        win32_process_keyboard_message(*new_input.mouse_buttons[0], (GetKeyState(VK_LBUTTON) & (1 << 15)) != 0);
+                        win32_process_keyboard_message(*new_input.mouse_buttons[1], (GetKeyState(VK_MBUTTON) & (1 << 15)) != 0);
+                        win32_process_keyboard_message(*new_input.mouse_buttons[2], (GetKeyState(VK_RBUTTON) & (1 << 15)) != 0);
+                        win32_process_keyboard_message(*new_input.mouse_buttons[3], (GetKeyState(VK_XBUTTON1) & (1 << 15)) != 0);
+                        win32_process_keyboard_message(*new_input.mouse_buttons[4], (GetKeyState(VK_XBUTTON2) & (1 << 15)) != 0);
+
                         // TODO(nahua): REMOVE THIS BLOCK LATER
                         // NOTE(nahua): For debugging with keyboard controls without controller
                         if new_keyboard_controller.move_up.ended_down {
@@ -988,6 +1038,8 @@ main :: () {
                         vibration.wRightMotorSpeed = 60000; // u16
                         XInputSetState(0, *vibration);
 
+                        thread: Thread_Context;
+
                         // Buffer
                         buffer: Game_Offscreen_Buffer;
                         buffer.memory = global_back_buffer.memory;
@@ -1002,7 +1054,7 @@ main :: () {
                             win32_playback_input(*win32_state, new_input);
                         }
 
-                        if game.update_and_render then game.update_and_render(memory=*game_memory, input=new_input, buffer=*buffer);
+                        if game.update_and_render then game.update_and_render(*thread, memory=*game_memory, input=new_input, buffer=*buffer);
 
                         audio_wall_clock: s64 = win32_get_wall_clock();
                         from_begin_to_audio_seconds: float32 = win32_get_seconds_elapsed(flip_wall_clock, audio_wall_clock);
@@ -1048,7 +1100,7 @@ main :: () {
                                 safe_write_cursor += sound_output.secondary_buffer_size;
                             }
                             assert(safe_write_cursor >= play_cursor);
-                            expected_sound_bytes_per_frame: s32 = (sound_output.samples_per_second * sound_output.bytes_per_sample) / GAME_UPDATE_HZ;
+                            expected_sound_bytes_per_frame: s32 = (sound_output.samples_per_second * sound_output.bytes_per_sample) / game_update_hz;
                             seconds_left_until_flip: float32 = cast(float32)target_seconds_per_frame - from_begin_to_audio_seconds;
                             expected_bytes_until_flip: s32 = cast(s32) ((seconds_left_until_flip / cast(float32)target_seconds_per_frame) * (cast(float32) expected_sound_bytes_per_frame));
                             expected_frame_boundary_byte: s32 = play_cursor + cast(s32)expected_bytes_until_flip;
@@ -1076,7 +1128,7 @@ main :: () {
                             sound_buffer.samples_per_second = sound_output.samples_per_second;
                             sound_buffer.sample_count = bytes_to_write / sound_output.bytes_per_sample;
                             sound_buffer.samples = samples;
-                            if game.get_sound_samples then game.get_sound_samples(memory=*game_memory, sound_buffer=*sound_buffer);
+                            if game.get_sound_samples then game.get_sound_samples(*thread, memory=*game_memory, sound_buffer=*sound_buffer);
                             win32_fill_sound_buffer(*sound_output, byte_to_lock, bytes_to_write, *sound_buffer);
 
                             #if HANDMADE_INTERNAL == 1 {
@@ -1136,15 +1188,6 @@ main :: () {
 
                         // NOTE(nahua): Moved here from before getting work_counter to align with source code
                         dimension := win32_get_window_dimension(window);
-                        #if HANDMADE_INTERNAL == 1 {
-                            // TODO(nahua): Note, current is wrong on the zeroth index
-                            win32_debug_sync_display(*global_back_buffer,
-                                                     debug_time_markers.count,
-                                                     debug_time_markers,
-                                                     debug_time_marker_index - 1,
-                                                     *sound_output,
-                                                     target_seconds_per_frame);
-                        }
                         device_context := GetDC(window);
                         win32_display_buffer_in_window(device_context,
                                                     dimension.width,

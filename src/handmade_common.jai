@@ -30,14 +30,14 @@ Win32 Platform Debug Code
     /*
     File I/O DEBUG for Win32
     */
-    debug_platform_free_file_memory :: (memory: *void) {
+    debug_platform_free_file_memory :: (thread: *Thread_Context, memory: *void) {
         if memory {
             VirtualFree(memory, 0, MEM_RELEASE);
         }
     }
 
 
-    debug_platform_read_entire_file :: (filename: string) -> Debug_Read_File_Result {
+    debug_platform_read_entire_file :: (thread: *Thread_Context, filename: string) -> Debug_Read_File_Result {
         result: Debug_Read_File_Result;
         handle := CreateFileA(filename.data, GENERIC_READ);
 
@@ -53,7 +53,7 @@ Win32 Platform Debug Code
                         result.contents_size = bytes_read;
                     } else {
                         // ERROR: Read failed
-                        debug_platform_free_file_memory(result.contents);
+                        debug_platform_free_file_memory(thread, result.contents);
                         result.contents = null;
                         // TODO(nahua): Logging
                     }
@@ -75,7 +75,7 @@ Win32 Platform Debug Code
     }
 
 
-    debug_platform_write_entire_file :: (filename: string, memory_size: u32, memory: *void) -> bool {
+    debug_platform_write_entire_file :: (thread: *Thread_Context, filename: string, memory_size: u32, memory: *void) -> bool {
         result: bool;
         handle := CreateFileA(filename=filename.data,
                               desired_access=GENERIC_WRITE,
@@ -100,6 +100,11 @@ Win32 Platform Debug Code
 
         return result;
     }
+}
+
+
+Thread_Context :: struct {
+    placeholder: s32;
 }
 
 
@@ -161,11 +166,17 @@ Game_Controller_Input :: struct {
 
 
 Game_Input :: struct {
+    mouse_buttons:  [5]Game_Button_State;
+    mouse_x:        s32;
+    mouse_y:        s32;
+    mouse_z:        s32;
+
     // NOTE(nahua): 1 keyboard + 4 controllers
     // Keyboard:    Windows API - Controller 0
     // Gamepad 0-3: XInput API  - Controller 1, 2, 3, 4
-    controllers: [5]Game_Controller_Input;
+    controllers:    [5]Game_Controller_Input;
 }
+
 
 Game_Memory :: struct {
     permanent_storage_size: u64;
@@ -195,13 +206,13 @@ Game_State :: struct {
 /*
 Function Types and Stubs
 */
-DEBUG_Platform_Free_File_Memory ::  #type (memory: *void) -> ();
-DEBUG_Platform_Read_Entire_File ::  #type (filename: string) -> Debug_Read_File_Result;
-DEBUG_Platform_Write_Entire_File :: #type (filename: string, memory_size: u32, memory: *void) -> bool;
+DEBUG_Platform_Free_File_Memory ::  #type (thread: *Thread_Context, memory: *void) -> ();
+DEBUG_Platform_Read_Entire_File ::  #type (thread: *Thread_Context, filename: string) -> Debug_Read_File_Result;
+DEBUG_Platform_Write_Entire_File :: #type (thread: *Thread_Context, filename: string, memory_size: u32, memory: *void) -> bool;
 
 
-Game_Update_And_Render :: #type (memory: *Game_Memory, input: *Game_Input, buffer: *Game_Offscreen_Buffer) -> ();
-Game_Get_Sound_Samples :: #type (memory: *Game_Memory, sound_buffer: *Game_Sound_Output_Buffer) -> ();
+Game_Update_And_Render :: #type (thread: *Thread_Context, memory: *Game_Memory, input: *Game_Input, buffer: *Game_Offscreen_Buffer) -> ();
+Game_Get_Sound_Samples :: #type (thread: *Thread_Context, memory: *Game_Memory, sound_buffer: *Game_Sound_Output_Buffer) -> ();
 
 
 /* Functions */

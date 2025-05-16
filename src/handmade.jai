@@ -77,7 +77,7 @@ render_weird_gradient :: (buffer: *Game_Offscreen_Buffer, x_offset: s32, y_offse
 
 /* TODO(Nahua): Check if the function needs to end with #no_context */
 #program_export
-game_get_sound_samples :: (memory: *Game_Memory, sound_buffer: *Game_Sound_Output_Buffer) {
+game_get_sound_samples :: (thread: *Thread_Context, memory: *Game_Memory, sound_buffer: *Game_Sound_Output_Buffer) {
     game_state: *Game_State = cast(*Game_State) memory.permanent_storage;
     game_output_sound(sound_buffer, game_state.tone_hz);
 }
@@ -85,7 +85,7 @@ game_get_sound_samples :: (memory: *Game_Memory, sound_buffer: *Game_Sound_Outpu
 
 /* TODO(Nahua): Check if the function needs to end with #no_context */
 #program_export
-game_update_and_render :: (memory: *Game_Memory, input: *Game_Input, buffer: *Game_Offscreen_Buffer) {
+game_update_and_render :: (thread: *Thread_Context, memory: *Game_Memory, input: *Game_Input, buffer: *Game_Offscreen_Buffer) {
     assert(*input.controllers[0].terminator - *input.controllers[0].buttons[0] == input.controllers[0].buttons.count);
     assert(size_of(Game_State) <= memory.permanent_storage_size);
 
@@ -93,10 +93,10 @@ game_update_and_render :: (memory: *Game_Memory, input: *Game_Input, buffer: *Ga
 
     if !memory.is_initialized {
         #if HANDMADE_INTERNAL == 1 {
-            file_data := debug_platform_read_entire_file("src/handmade.jai");
+            file_data := debug_platform_read_entire_file(thread, "src/handmade.jai");
             if file_data.contents {
-                debug_platform_write_entire_file("test.out", file_data.contents_size, file_data.contents);
-                debug_platform_free_file_memory(file_data.contents);
+                debug_platform_write_entire_file(thread, "test.out", file_data.contents_size, file_data.contents);
+                debug_platform_free_file_memory(thread, file_data.contents);
             }
         }
 
@@ -136,4 +136,12 @@ game_update_and_render :: (memory: *Game_Memory, input: *Game_Input, buffer: *Ga
 
     render_weird_gradient(buffer, game_state.x_offset, game_state.y_offset);
     render_player(buffer, game_state.player_x, game_state.player_y);
+
+    for mouse_button: input.mouse_buttons {
+        if mouse_button.ended_down {
+            render_player(buffer, cast(s32) (10 + 20 * it_index), 10);
+        }
+    }
+
+    render_player(buffer, input.mouse_x, input.mouse_y);
 }
