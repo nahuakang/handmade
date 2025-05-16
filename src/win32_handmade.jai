@@ -139,8 +139,6 @@ global_perf_count_frequency: s64;
 /*
 Handmade Hero Constants
 */
-GAME_UPDATE_HZ          :: MONITOR_REFRESH_HZ / 2;
-MONITOR_REFRESH_HZ      :: 60;
 WINDOW_CLASS_NAME       :: "HandmadeHeroWindowClass";
 WINDOW_NAME             :: "Handmade Hero";
 
@@ -814,9 +812,6 @@ main :: () {
     window_class.hInstance = GetModuleHandleW(null);
     window_class.lpszClassName = utf8_to_wide(WINDOW_CLASS_NAME);
 
-    // TODO(nahua): How do we reliably query on this on Windows?
-    target_seconds_per_frame: float32 = 1.0 / cast(float32) GAME_UPDATE_HZ;
-
     if RegisterClassExW(*window_class) {
         window := CreateWindowExW(0, //WS_EX_TOPMOST|WS_EX_LAYERED,
                                   window_class.lpszClassName,
@@ -832,6 +827,16 @@ main :: () {
                                   null);
 
         if window {
+            monitor_refresh_hz := 60;
+            refresh_dc := GetDC(window);
+            win32_refresh_rate := GetDeviceCaps(refresh_dc, VREFRESH);
+            ReleaseDC(window, refresh_dc);
+            if win32_refresh_rate > 1 {
+                monitor_refresh_hz = win32_refresh_rate;
+            }
+            game_update_hz: s32 = cast(s32) (cast(float32)monitor_refresh_hz / 2.0);
+            target_seconds_per_frame: float32 = 1.0 / game_update_hz;
+
             sound_output: Win32_Sound_Output;
             sound_output.samples_per_second    = 48000;
             sound_output.bytes_per_sample      = size_of(s16) * 2;
@@ -839,7 +844,7 @@ main :: () {
             sound_output.running_sample_index  = 0;
             // TODO(nahua): Actually compute this variance and see
             // what the lowest reasonable value is.
-            sound_output.safety_bytes = ((sound_output.samples_per_second * sound_output.bytes_per_sample) / GAME_UPDATE_HZ) / 3;
+            sound_output.safety_bytes = ((sound_output.samples_per_second * sound_output.bytes_per_sample) / game_update_hz) / 3;
 
             win32_init_dsound(window, sound_output.samples_per_second, sound_output.secondary_buffer_size);
             win32_clear_buffer(*sound_output);
@@ -867,7 +872,7 @@ main :: () {
                 new_input: *Game_Input = *input[1];
 
                 debug_time_marker_index := 0;
-                debug_time_markers: [GAME_UPDATE_HZ / 2]Win32_Debug_Time_Marker;
+                debug_time_markers: [30]Win32_Debug_Time_Marker; // NOTE(nahua): 30 is game_update_hz / 2
 
                 sound_is_valid: bool;
 
@@ -988,6 +993,8 @@ main :: () {
                         vibration.wRightMotorSpeed = 60000; // u16
                         XInputSetState(0, *vibration);
 
+                        thread: Thread_Context;
+
                         // Buffer
                         buffer: Game_Offscreen_Buffer;
                         buffer.memory = global_back_buffer.memory;
@@ -1002,7 +1009,7 @@ main :: () {
                             win32_playback_input(*win32_state, new_input);
                         }
 
-                        if game.update_and_render then game.update_and_render(memory=*game_memory, input=new_input, buffer=*buffer);
+                        if game.update_and_render then game.update_and_render(*thread, memory=*game_memory, input=new_input, buffer=*buffer);
 
                         audio_wall_clock: s64 = win32_get_wall_clock();
                         from_begin_to_audio_seconds: float32 = win32_get_seconds_elapsed(flip_wall_clock, audio_wall_clock);
@@ -1048,7 +1055,7 @@ main :: () {
                                 safe_write_cursor += sound_output.secondary_buffer_size;
                             }
                             assert(safe_write_cursor >= play_cursor);
-                            expected_sound_bytes_per_frame: s32 = (sound_output.samples_per_second * sound_output.bytes_per_sample) / GAME_UPDATE_HZ;
+                            expected_sound_bytes_per_frame: s32 = (sound_output.samples_per_second * sound_output.bytes_per_sample) / game_update_hz;
                             seconds_left_until_flip: float32 = cast(float32)target_seconds_per_frame - from_begin_to_audio_seconds;
                             expected_bytes_until_flip: s32 = cast(s32) ((seconds_left_until_flip / cast(float32)target_seconds_per_frame) * (cast(float32) expected_sound_bytes_per_frame));
                             expected_frame_boundary_byte: s32 = play_cursor + cast(s32)expected_bytes_until_flip;
@@ -1076,7 +1083,7 @@ main :: () {
                             sound_buffer.samples_per_second = sound_output.samples_per_second;
                             sound_buffer.sample_count = bytes_to_write / sound_output.bytes_per_sample;
                             sound_buffer.samples = samples;
-                            if game.get_sound_samples then game.get_sound_samples(memory=*game_memory, sound_buffer=*sound_buffer);
+                            if game.get_sound_samples then game.get_sound_samples(*thread, memory=*game_memory, sound_buffer=*sound_buffer);
                             win32_fill_sound_buffer(*sound_output, byte_to_lock, bytes_to_write, *sound_buffer);
 
                             #if HANDMADE_INTERNAL == 1 {
