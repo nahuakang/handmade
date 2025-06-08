@@ -168,11 +168,12 @@ Game_Input :: struct {
     mouse_x:        s32;
     mouse_y:        s32;
     mouse_z:        s32;
-
     // NOTE(nahua): 1 keyboard + 4 controllers
     // Keyboard:    Windows API - Controller 0
     // Gamepad 0-3: XInput API  - Controller 1, 2, 3, 4
     controllers:    [5]Game_Controller_Input;
+
+    seconds_to_advance_over_update: float32;
 }
 
 
@@ -190,14 +191,6 @@ Game_Memory :: struct {
 
 
 Game_State :: struct {
-    tone_hz:  s32;
-    x_offset: s32;
-    y_offset: s32;
-
-    // TODO(nahua): Throwaway
-    player_x: s32;
-    player_y: s32;
-    jump:     float32;
 }
 
 

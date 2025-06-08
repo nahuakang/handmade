@@ -15,44 +15,59 @@ game_output_sound :: (sound_buffer: *Game_Sound_Output_Buffer, tone_hz: s32) {
     while sample_index < sound_buffer.sample_count {
         defer sample_index += 1;
 
-        sine_value: float32 = sin(tsine);
-        sample_value := cast(s16) (sine_value * cast(float32) tone_volume);
+        // NOTE(nahua): Day 27 cleanup; disable the sine wave test sound
+        // sine_value: float32 = sin(tsine);
+        // sample_value := cast(s16) (sine_value * cast(float32) tone_volume);
+        sample_value: s16 = 0;
 
         << sample_out = sample_value;
         sample_out += 1;
         << sample_out = sample_value;
         sample_out += 1;
 
-        tsine += 2.0 * PI / (cast(float32) wave_period);
-        if tsine > 2.0 * PI {
-            tsine -= 2.0 * PI;
-        }
+        // NOTE(nahua): Day 27 cleanup
+        // tsine += 2.0 * PI / (cast(float32) wave_period);
+        // if tsine > 2.0 * PI {
+        //     tsine -= 2.0 * PI;
+        // }
     }
 }
 
 
-render_player :: (buffer: *Game_Offscreen_Buffer, player_x: s32, player_y: s32) {
-    end_of_buffer := cast(*u8) buffer.memory + buffer.pitch * buffer.height;
+// NOTE(nahua): Casey defines it as DrawRectangle(game_offscreen_buffer *Buffer, f32 RealMinX, f32 RealMinY, f32 RealMaxX, f32 RealMaxY)
+// NOTE(nahua): But we will use a simpler convention here.
+draw_rectangle :: (buffer: *Game_Offscreen_Buffer, x: float32, y: float32, w: float32, h: float32, color: u32) {
+    min_x := round_float32_to_s32(x);
+    min_y := round_float32_to_s32(y);
+    max_x := round_float32_to_s32(w);
+    max_y := round_float32_to_s32(h);
+    if min_x < 0 min_x = 0;
+    if min_y < 0 min_y = 0;
+    if max_x > buffer.width  max_x = buffer.width;
+    if max_y > buffer.height max_y = buffer.height;
 
-    color: u32 = 0xFFFFFFFF;
-    left   := player_x;
-    right  := player_x + 10;
-    top    := player_y;
-    bottom := player_y + 10;
+    // Cast to *u8 to do byte-level pointer arithmetics; remember buffer.pitch = buffer.width * bytes_per_pixel
+    row: *u8 = cast(*u8) (buffer.memory + min_x * buffer.bytes_per_pixel + min_y * buffer.pitch);
+    for y: min_y..max_y-1 {
+        pixel: *u32 = cast(*u32) row;
 
-    for x: left..right-1 {
-        pixel := cast(*u8) buffer.memory + x * buffer.bytes_per_pixel + top * buffer.pitch;
-
-        for y: top..bottom-1 {
-            if (pixel >= buffer.memory) && ((pixel + 4) <= end_of_buffer) {
-                << (cast(*u32) pixel) = color;
-            }
-            pixel += buffer.pitch;
+        for x: min_x..max_x-1 {
+            pixel.* = color;
+            pixel += 1; // Advance another 4 bytes (or 1 pixel)
         }
+
+        row += buffer.pitch;
     }
 }
 
 
+round_float32_to_s32 :: (number: float32) -> s32 {
+    result := cast(s32) (number + 0.5);
+    return result;
+}
+
+
+// NOTE(nahua): Unused function
 render_weird_gradient :: (buffer: *Game_Offscreen_Buffer, x_offset: s32, y_offset: s32) {
     row := cast(*u8) buffer.memory;
 
@@ -79,7 +94,7 @@ render_weird_gradient :: (buffer: *Game_Offscreen_Buffer, x_offset: s32, y_offse
 #program_export
 game_get_sound_samples :: (thread: *Thread_Context, memory: *Game_Memory, sound_buffer: *Game_Sound_Output_Buffer) {
     game_state: *Game_State = cast(*Game_State) memory.permanent_storage;
-    game_output_sound(sound_buffer, game_state.tone_hz);
+    game_output_sound(sound_buffer, 400);
 }
 
 
@@ -92,56 +107,18 @@ game_update_and_render :: (thread: *Thread_Context, memory: *Game_Memory, input:
     game_state: *Game_State = cast(*Game_State) memory.permanent_storage;
 
     if !memory.is_initialized {
-        #if HANDMADE_INTERNAL == 1 {
-            file_data := debug_platform_read_entire_file(thread, "src/handmade.jai");
-            if file_data.contents {
-                debug_platform_write_entire_file(thread, "test.out", file_data.contents_size, file_data.contents);
-                debug_platform_free_file_memory(thread, file_data.contents);
-            }
-        }
-
-        game_state.tone_hz       = 256;
-        game_state.player_x      = 100;
-        game_state.player_y      = 100;
-
         memory.is_initialized    = true;
     }
 
     for controller_index: 0..input.controllers.count-1 {
         controller: *Game_Controller_Input = get_controller(input, controller_index);
         if controller.is_analog {
-            game_state.x_offset += cast(s32) (4.0 * controller.stick_average_x);
-            game_state.tone_hz   = 256 + cast(s32) (128.0 * controller.stick_average_y);
+            // NOTE(nahua): Use analog movement tuning
         } else {
             // NOTE(nahua): Use digital movement tuning
-            if controller.move_left.ended_down {
-                game_state.x_offset -= 1;
-            }
-
-            if controller.move_right.ended_down {
-                game_state.x_offset += 1;
-            }
-        }
-
-        game_state.player_x += cast(s32)(4.0 * controller.stick_average_x);
-        game_state.player_y -= cast(s32)(4.0 * controller.stick_average_y);
-        if game_state.jump >0 {
-            game_state.player_y += cast(s32)(5.0 * sin(0.5 * PI * game_state.jump));
-        }
-        if controller.action_down.ended_down {
-            game_state.jump = 4.0;
-        }
-        game_state.jump -= 0.033;
-    }
-
-    render_weird_gradient(buffer, game_state.x_offset, game_state.y_offset);
-    render_player(buffer, game_state.player_x, game_state.player_y);
-
-    for mouse_button: input.mouse_buttons {
-        if mouse_button.ended_down {
-            render_player(buffer, cast(s32) (10 + 20 * it_index), 10);
         }
     }
 
-    render_player(buffer, input.mouse_x, input.mouse_y);
+    draw_rectangle(buffer, 0, 0, xx buffer.width, xx buffer.height, 0x00FF00FF);
+    draw_rectangle(buffer, 10, 10, 40, 40, 0x0000FFFF);
 }

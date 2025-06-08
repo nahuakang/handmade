@@ -813,7 +813,8 @@ main :: () {
 
     init_gamepad();
 
-    win32_resize_dib_section(*global_back_buffer, 1280, 720);
+    // win32_resize_dib_section(*global_back_buffer, 1920, 1080);
+    win32_resize_dib_section(*global_back_buffer, 960, 540);
 
     window_class: WNDCLASSEXW;
     window_class.cbSize = size_of(WNDCLASSEXW);
@@ -846,7 +847,7 @@ main :: () {
             if win32_refresh_rate > 1 {
                 monitor_refresh_hz = win32_refresh_rate;
             }
-            game_update_hz: s32 = cast(s32) (cast(float32)monitor_refresh_hz / 2.0);
+            game_update_hz: float32 = (cast(float32)monitor_refresh_hz / 2.0);
             target_seconds_per_frame: float32 = 1.0 / game_update_hz;
 
             sound_output: Win32_Sound_Output;
@@ -856,7 +857,7 @@ main :: () {
             sound_output.running_sample_index  = 0;
             // TODO(nahua): Actually compute this variance and see
             // what the lowest reasonable value is.
-            sound_output.safety_bytes = ((sound_output.samples_per_second * sound_output.bytes_per_sample) / game_update_hz) / 3;
+            sound_output.safety_bytes = ((sound_output.samples_per_second * sound_output.bytes_per_sample) / cast(s32)game_update_hz) / 3;
 
             win32_init_dsound(window, sound_output.samples_per_second, sound_output.secondary_buffer_size);
             win32_clear_buffer(*sound_output);
@@ -918,6 +919,7 @@ main :: () {
 
                 last_cycle_count: u64 = rdtsc();
                 while global_running {
+                    new_input.seconds_to_advance_over_update = target_seconds_per_frame;
                     new_dll_write_time: FILETIME = win32_get_last_write_time(source_dll_name);
 
                     if (CompareFileTime(*new_dll_write_time, *game.dll_last_write_time)) {
@@ -1100,7 +1102,7 @@ main :: () {
                                 safe_write_cursor += sound_output.secondary_buffer_size;
                             }
                             assert(safe_write_cursor >= play_cursor);
-                            expected_sound_bytes_per_frame: s32 = (sound_output.samples_per_second * sound_output.bytes_per_sample) / game_update_hz;
+                            expected_sound_bytes_per_frame: s32 = cast(s32) (cast(float32) (sound_output.samples_per_second * sound_output.bytes_per_sample) / game_update_hz);
                             seconds_left_until_flip: float32 = cast(float32)target_seconds_per_frame - from_begin_to_audio_seconds;
                             expected_bytes_until_flip: s32 = cast(s32) ((seconds_left_until_flip / cast(float32)target_seconds_per_frame) * (cast(float32) expected_sound_bytes_per_frame));
                             expected_frame_boundary_byte: s32 = play_cursor + cast(s32)expected_bytes_until_flip;
