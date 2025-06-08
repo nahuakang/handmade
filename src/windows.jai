@@ -1,7 +1,3 @@
-// We cannot see Windows in the application scope, so we must import it here.
-#import "Windows";
-
-
 gdi      :: #system_library "Gdi32";
 kernel32 :: #system_library "kernel32";
 user32   :: #system_library "user32";

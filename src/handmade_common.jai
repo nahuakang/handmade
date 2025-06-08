@@ -3,8 +3,6 @@
 Shared entities between platform and game code.
 
 */
-#import "Windows";
-
 
 Kilobytes :: (value: $T) -> T { return value * cast(T) 1024; }
 Megabytes :: (value: $T) -> T { return Kilobytes(value) * cast(T) 1024; }
@@ -222,3 +220,7 @@ get_controller :: (input: *Game_Input, controller_index: s64) -> *Game_Controlle
     result: *Game_Controller_Input = *input.controllers[controller_index];
     return result;
 }
+
+
+#scope_file
+#import "Windows";

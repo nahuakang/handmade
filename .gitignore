@@ -1,4 +1,6 @@
 .build/
 build/
+handmade.sublime-project
+handmade.sublime-workspace
 *.hmi
 test.out
