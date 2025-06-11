@@ -1,5 +1,6 @@
 .build/
 build/
+handmade_raddebug
 handmade.sublime-project
 handmade.sublime-workspace
 *.hmi

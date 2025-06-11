@@ -1,7 +1,7 @@
 /*
   NOTE(nahua): This is the build file for Handmade Hero in Jai.
   Compile the program using:
-  jai build - --<flag>
+  jai build - -<flag>
 
   Build flags include the following:
 

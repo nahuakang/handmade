@@ -173,7 +173,7 @@ Game_Input :: struct {
     // Gamepad 0-3: XInput API  - Controller 1, 2, 3, 4
     controllers:    [5]Game_Controller_Input;
 
-    seconds_to_advance_over_update: float32;
+    dt_for_frame: float32;
 }
 
 
@@ -191,6 +191,8 @@ Game_Memory :: struct {
 
 
 Game_State :: struct {
+    player_x: float32;
+    player_y: float32;
 }
 
 

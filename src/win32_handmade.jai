@@ -919,7 +919,7 @@ main :: () {
 
                 last_cycle_count: u64 = rdtsc();
                 while global_running {
-                    new_input.seconds_to_advance_over_update = target_seconds_per_frame;
+                    new_input.dt_for_frame = target_seconds_per_frame;
                     new_dll_write_time: FILETIME = win32_get_last_write_time(source_dll_name);
 
                     if (CompareFileTime(*new_dll_write_time, *game.dll_last_write_time)) {
