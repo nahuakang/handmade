@@ -21,7 +21,7 @@
 
 build :: () {
     args := get_build_options().compile_time_command_line;
-    build_exe := !array_find(args, "--dll-only");  // Default to building exe unless --dll-only is specified
+    build_exe := !array_find(args, "-dll-only");  // Default to building exe unless -dll-only is specified
 
     // Build Win32 Handmade Platform Layer
     if build_exe {
@@ -38,8 +38,8 @@ build :: () {
             set_optimization(*options, .DEBUG);
 
             args := options.compile_time_command_line;
-            internal_build := array_find(args, "--internal"); // jai build.jai - --internal
-            slow_code      := array_find(args, "--slow");     // jai build.jai - --slow
+            internal_build := array_find(args, "-internal"); // jai build.jai - -internal
+            slow_code      := array_find(args, "-slow");     // jai build.jai - -slow
 
             set_build_options(options, w);
 
@@ -61,11 +61,11 @@ build :: () {
         options.output_executable_name = "handmade";
         options.output_path = "build";
         options.output_type            = .DYNAMIC_LIBRARY;
-        set_optimization(*options, .OPTIMIZED);
+        set_optimization(*options, .DEBUG);
 
         args := options.compile_time_command_line;
-        internal_build := array_find(args, "--internal"); // jai build.jai - --internal
-        slow_code      := array_find(args, "--slow");     // jai build.jai - --slow
+        internal_build := array_find(args, "-internal"); // jai build.jai - -internal
+        slow_code      := array_find(args, "-slow");     // jai build.jai - -slow
 
         set_build_options(options, w);
 
