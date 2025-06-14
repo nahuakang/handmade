@@ -46,9 +46,9 @@
 #import "Windows";
 #import "Windows_Utf8";
 
-#load "windows.jai";          // Patching Windows module in Jai
-#load "dsound.jai";           // Patching Sound_Player module in Jai
-#load "handmade_common.jai";  // Shared types between win32 platform and game code
+#load "windows.jai";            // Patching Windows module in Jai
+#load "dsound.jai";             // Patching Sound_Player module in Jai
+#load "handmade_platform.jai";  // Shared types between win32 platform and game code
 
 
 /*
@@ -311,12 +311,19 @@ win32_draw_sound_buffer_marker :: (back_buffer: *Win32_Offscreen_Buffer,
 
 
 win32_display_buffer_in_window :: (device_context: HDC, window_width: s32, window_height: s32, buffer: *Win32_Offscreen_Buffer) {
+    offset_x: s32 = 10;
+    offset_y: s32 = 10;
+    PatBlt(device_context, 0, 0, window_width, offset_y, BLACKNESS);
+    PatBlt(device_context, 0, offset_y + buffer.height, window_width, window_height, BLACKNESS);
+    PatBlt(device_context, 0, 0, offset_x, window_height, BLACKNESS);
+    PatBlt(device_context, offset_x + buffer.width, 0, window_width, window_height, BLACKNESS);
+
     // NOTE(nahua): For prototyping purposes, we're going to always blit
     // 1-to-1 pixels to make sure we don't introduce artifacts with
     // strecthing while we are learning to code the renderer.
     StretchDIBits(device_context,
-                  0, 0, buffer.width, buffer.height, // window_width, window_height, // Destination (window)
-                  0, 0, buffer.width, buffer.height, // Source (bitmap buffer)
+                  offset_x, offset_y, buffer.width, buffer.height, // Destination (window)
+                  0, 0, buffer.width, buffer.height,               // Source (bitmap buffer)
                   buffer.memory,
                   *buffer.info,
                   DIB_RGB_COLORS,

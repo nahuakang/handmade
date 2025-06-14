@@ -21,6 +21,14 @@ DWORD dwFlags for SetLayeredWindowAttributes
 LWA_ALPHA :: 0x00000002;
 LWA_COLORKEY :: 0x00000001;
 
+/*
+ROP Values (NOTE(nahua): Not sure if correct)
+*/
+BLACKNESS :: 0x00000042;
+WHITENESS :: 0x00FF0062;
+PATCOPY   :: 0x00F00021;
+PATINVERT :: 0x005A0049;
+DSTINVERT :: 0x00550009;
 
 /*
 Win32: Missing winerror
