@@ -2,7 +2,29 @@
 #import "File";
 #import "Math";
 
-#load "handmade_common.jai";
+#load "handmade_platform.jai";
+
+
+Tile_Map :: struct {
+    count_x: s32;
+    count_y: s32;
+
+    upper_left_x: float32;
+    upper_left_y: float32;
+    tile_width: float32;
+    tile_height: float32;
+
+    tiles: []u32; // NOTE(nahua): Day 29 - Differ from Casey because there's only 1D array view in Jai
+}
+
+
+World :: struct {
+    // TODO(nahua): Beginner's sparseness
+    tile_map_count_x: s32;
+    tile_map_count_y: s32;
+
+    tile_maps: []Tile_Map; // NOTE(nahua): Day 29 - Differ from Casey because there's only 1D array view in Jai
+}
 
 
 game_output_sound :: (sound_buffer: *Game_Sound_Output_Buffer, tone_hz: s32) {
@@ -68,7 +90,7 @@ draw_rectangle :: (buffer: *Game_Offscreen_Buffer, x: float32, y: float32, w: fl
 }
 
 
-round_float32_to_s32 :: (number: float32) -> s32 {
+round_float32_to_s32 :: inline (number: float32) -> s32 {
     result := cast(s32) (number + 0.5);
     return result;
 }
@@ -111,13 +133,97 @@ game_update_and_render :: (thread: *Thread_Context, memory: *Game_Memory, input:
     assert(*input.controllers[0].terminator - *input.controllers[0].buttons[0] == input.controllers[0].buttons.count);
     assert(size_of(Game_State) <= memory.permanent_storage_size);
 
+    TILE_MAP_COUNT_X :: 17;
+    TILE_MAP_COUNT_Y :: 9;
+
+    tiles00: [TILE_MAP_COUNT_Y][TILE_MAP_COUNT_X]u32 = .[
+        .[1, 1, 1, 1,  1, 1, 1, 1,  1, 1, 1, 1,  1, 1, 1, 1,  1],
+        .[1, 1, 0, 0,  0, 1, 0, 0,  0, 0, 0, 0,  0, 1, 0, 0,  1],
+        .[1, 1, 0, 0,  0, 0, 0, 0,  1, 0, 0, 0,  0, 0, 1, 0,  1],
+        .[1, 0, 0, 0,  0, 0, 0, 0,  1, 0, 0, 0,  0, 0, 0, 0,  1],
+        .[1, 0, 0, 0,  0, 1, 0, 0,  1, 0, 0, 0,  0, 0, 0, 0,  0],
+        .[1, 1, 0, 0,  0, 1, 0, 0,  1, 0, 0, 0,  0, 1, 0, 0,  1],
+        .[1, 0, 0, 0,  0, 1, 0, 0,  1, 0, 0, 0,  1, 0, 0, 0,  1],
+        .[1, 1, 1, 1,  1, 0, 0, 0,  0, 0, 0, 0,  0, 1, 0, 0,  1],
+        .[1, 1, 1, 1,  1, 1, 1, 1,  0, 1, 1, 1,  1, 1, 1, 1,  1],
+    ];
+    tiles01: [TILE_MAP_COUNT_Y][TILE_MAP_COUNT_X]u32 = .[
+        .[1, 1, 1, 1,  1, 1, 1, 1,  0, 1, 1, 1,  1, 1, 1, 1,  1],
+        .[1, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  1],
+        .[1, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  1],
+        .[1, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  1],
+        .[1, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  0],
+        .[1, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  1],
+        .[1, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  1],
+        .[1, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  1],
+        .[1, 1, 1, 1,  1, 1, 1, 1,  1, 1, 1, 1,  1, 1, 1, 1,  1],
+    ];
+    tiles10: [TILE_MAP_COUNT_Y][TILE_MAP_COUNT_X]u32 = .[
+        .[1, 1, 1, 1,  1, 1, 1, 1,  1, 1, 1, 1,  1, 1, 1, 1,  1],
+        .[1, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  1],
+        .[1, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  1],
+        .[1, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  1],
+        .[0, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  1],
+        .[1, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  1],
+        .[1, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  1],
+        .[1, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  1],
+        .[1, 1, 1, 1,  1, 1, 1, 1,  0, 1, 1, 1,  1, 1, 1, 1,  1],
+    ];
+    tiles11: [TILE_MAP_COUNT_Y][TILE_MAP_COUNT_X]u32 = .[
+        .[1, 1, 1, 1,  1, 1, 1, 1,  0, 1, 1, 1,  1, 1, 1, 1,  1],
+        .[1, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  1],
+        .[1, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  1],
+        .[1, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  1],
+        .[0, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  1],
+        .[1, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  1],
+        .[1, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  1],
+        .[1, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  1],
+        .[1, 1, 1, 1,  1, 1, 1, 1,  1, 1, 1, 1,  1, 1, 1, 1,  1],
+    ];
+
+    tile_maps: [2][2]Tile_Map;
+    tile_maps[0][0].count_x = TILE_MAP_COUNT_X;
+    tile_maps[0][0].count_y = TILE_MAP_COUNT_Y;
+
+    tile_maps[0][0].upper_left_x = -30;
+    tile_maps[0][0].upper_left_y = 0;
+    tile_maps[0][0].tile_width = 60;
+    tile_maps[0][0].tile_height = 60;
+
+    // NOTE(nahua): Day 29 - Differ from Casey as we cast the Array of Arrays into 1D array
+    tile_maps[0][0].tiles.data = cast(*u32) *tiles00[0][0];
+    tile_maps[0][0].tiles.count = TILE_MAP_COUNT_X * TILE_MAP_COUNT_Y;
+
+    tile_maps[0][1] = tile_maps[0][0];
+    tile_maps[0][1].tiles.data = cast(*u32) *tiles01[0][0];
+    tile_maps[0][1].tiles.count = TILE_MAP_COUNT_X * TILE_MAP_COUNT_Y;
+
+    tile_maps[1][0] = tile_maps[0][0];
+    tile_maps[1][0].tiles.data = cast(*u32) *tiles01[0][0];
+    tile_maps[1][0].tiles.count = TILE_MAP_COUNT_X * TILE_MAP_COUNT_Y;
+
+    tile_maps[1][1] = tile_maps[0][0];
+    tile_maps[1][1].tiles.data = cast(*u32) *tiles01[0][0];
+    tile_maps[1][1].tiles.count = TILE_MAP_COUNT_X * TILE_MAP_COUNT_Y;
+
+    tile_map: *Tile_Map = *tile_maps[0][0];
+
+    world: World;
+    world.tile_map_count_x = 2;
+    world.tile_map_count_y = 2;
+    world.tile_maps.data = cast(*Tile_Map) *tile_maps[0][0];
+    world.tile_maps.count = world.tile_map_count_x * world.tile_map_count_y;
+
+    player_width: float32 = tile_map.tile_width *0.75;
+    player_height: float32 = tile_map.tile_height;
+
     game_state: *Game_State = cast(*Game_State) memory.permanent_storage;
 
     if !memory.is_initialized {
         memory.is_initialized = true;
         // NOTE(nahua): Initialize player position to be visible
-        game_state.player_x = 100;
-        game_state.player_y = 100;
+        game_state.player_x = 150;
+        game_state.player_y = 150;
     }
 
     for controller_index: 0..input.controllers.count-1 {
@@ -133,47 +239,37 @@ game_update_and_render :: (thread: *Thread_Context, memory: *Game_Memory, input:
             if controller.move_left.ended_down  d_player_x = -1;
             if controller.move_down.ended_down  d_player_y = 1;
             if controller.move_up.ended_down    d_player_y = -1;
-            d_player_x *= 64;
-            d_player_y *= 64;
+            d_player_x *= 128;
+            d_player_y *= 128;
 
             // TODO(nahua): Diagonal will be faster! Fix once we have vectors :)
-            game_state.player_x += input.dt_for_frame * d_player_x;
-            game_state.player_y += input.dt_for_frame * d_player_y;
+            new_player_x := game_state.player_x + input.dt_for_frame * d_player_x;
+            new_player_y := game_state.player_y + input.dt_for_frame * d_player_y;
+
+            if is_tile_map_point_empty(tile_map, new_player_x, new_player_y) &&
+               is_tile_map_point_empty(tile_map, new_player_x - 0.5 * player_width, new_player_y) &&
+               is_tile_map_point_empty(tile_map, new_player_x + 0.5 * player_width, new_player_y)
+            {
+                game_state.player_x = new_player_x;
+                game_state.player_y = new_player_y;
+            }
         }
     }
 
-    tile_map: [9][17]u32 = .[
-        .[1, 1, 1, 1,  1, 1, 1, 1,  0, 1, 1, 1,  1, 1, 1, 1,  1],
-        .[1, 1, 0, 0,  0, 1, 0, 0,  0, 0, 0, 0,  0, 1, 0, 0,  1],
-        .[1, 1, 0, 0,  0, 0, 0, 0,  1, 0, 0, 0,  0, 0, 1, 0,  1],
-        .[1, 0, 0, 0,  0, 0, 0, 0,  1, 0, 0, 0,  0, 0, 0, 0,  1],
-
-        .[0, 0, 0, 0,  0, 1, 0, 0,  1, 0, 0, 0,  0, 0, 0, 0,  0],
-        .[1, 1, 0, 0,  0, 1, 0, 0,  1, 0, 0, 0,  0, 1, 0, 0,  1],
-        .[1, 0, 0, 0,  0, 1, 0, 0,  1, 0, 0, 0,  1, 0, 0, 0,  1],
-        .[1, 1, 1, 1,  1, 0, 0, 0,  1, 0, 0, 0,  0, 1, 0, 0,  1],
-
-        .[1, 1, 1, 1,  1, 1, 1, 1,  0, 1, 1, 1,  1, 1, 1, 1,  1],
-    ];
-
     draw_rectangle(buffer, 0, 0, xx buffer.width, xx buffer.height, r = 1.0, g = 0.0, b = 1.0);
 
-    upper_left_x: float32 = -30;
-    upper_left_y: float32 = 0;
-    tile_width: float32 = 60;
-    tile_height: float32 = 60;
-    for row: 0..8 {
-        for col: 0..16 {
-            tile_id: u32 = tile_map[row][col];
+    for row: 0..TILE_MAP_COUNT_Y-1 {
+        for col: 0..TILE_MAP_COUNT_X-1 {
+            tile_id: u32 = get_tile_value_unchecked(tile_map, cast(s32)col, cast(s32)row);
             gray: float32 = 0.5;
             if tile_id == 1 {
                 gray = 1.0;
             }
 
-            x: float32 = upper_left_x + (cast(float32)col) * tile_width;
-            y: float32 = upper_left_y + (cast(float32)row) * tile_height;
-            w: float32 = x + tile_width;
-            h: float32 = y + tile_height;
+            x: float32 = tile_map.upper_left_x + (cast(float32)col) * tile_map.tile_width;
+            y: float32 = tile_map.upper_left_y + (cast(float32)row) * tile_map.tile_height;
+            w: float32 = x + tile_map.tile_width;
+            h: float32 = y + tile_map.tile_height;
 
             draw_rectangle(buffer, x, y, w, h, gray, gray, gray);
         }
@@ -182,12 +278,56 @@ game_update_and_render :: (thread: *Thread_Context, memory: *Game_Memory, input:
     player_r: float32 = 1;
     player_g: float32 = 1;
     player_b: float32 = 0;
-    player_width: float32 = tile_width * 0.75;
-    player_height: float32 = tile_height;
     player_left: float32 = game_state.player_x - (0.5 * player_width);
     player_top: float32 = game_state.player_y - player_height;
     draw_rectangle(buffer, player_left, player_top,
                    player_left + player_width,
                    player_top + player_height,
                    player_r, player_g, player_b);
+}
+
+
+is_tile_map_point_empty :: (tile_map: *Tile_Map, test_x: float32, test_y: float32) -> bool {
+    empty: bool;
+
+    tile_x := cast(s32) ((test_x - tile_map.upper_left_x) / tile_map.tile_width);
+    tile_y := cast(s32) ((test_y - tile_map.upper_left_y) / tile_map.tile_height);
+
+    if tile_x >= 0 && tile_x < tile_map.count_x &&
+       tile_y >= 0 && tile_y < tile_map.count_y
+    {
+        tile_map_value: u32 = get_tile_value_unchecked(tile_map, tile_x, tile_y);
+        empty = tile_map_value == 0;
+    }
+
+    return empty;
+}
+
+
+is_world_point_empty :: (world: *World, tile_map_x: s32, tile_map_y: s32, test_x: float32, test_y: float32) -> bool {
+    empty: bool;
+    tile_map: *Tile_Map = get_tile_map(world, tile_map_x, tile_map_y);
+    if tile_map {
+        empty = is_tile_map_point_empty(tile_map, test_x, test_y);
+    }
+
+    return empty;
+}
+
+
+get_tile_value_unchecked :: (tile_map: *Tile_Map, tile_x: s32, tile_y: s32) -> u32 {
+    tile_map_value: u32 = tile_map.tiles[tile_y * tile_map.count_x + tile_x];
+    return tile_map_value;
+}
+
+
+get_tile_map :: (world: *World, tile_map_x: s32, tile_map_y: s32) -> *Tile_Map {
+    tile_map: *Tile_Map = ---;
+    if (tile_map_x >= 0 && tile_map_x < world.tile_map_count_x) &&
+       (tile_map_y >= 0 && tile_map_y < world.tile_map_count_y)
+    {
+        tile_map = *world.tile_maps[tile_map_y * world.tile_map_count_x + tile_map_x];
+    }
+
+    return tile_map;
 }
