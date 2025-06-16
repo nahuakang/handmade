@@ -191,6 +191,9 @@ Game_Memory :: struct {
 
 
 Game_State :: struct {
+    player_tile_map_x: s32;
+    player_tile_map_y: s32;
+
     player_x: float32;
     player_y: float32;
 }
