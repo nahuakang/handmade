@@ -190,6 +190,9 @@ game_update_and_render :: (thread: *Thread_Context, memory: *Game_Memory, input:
     tile_maps[0][0].tile_width = 60;
     tile_maps[0][0].tile_height = 60;
 
+    player_width: float32 = tile_maps[0][0].tile_width *0.75;
+    player_height: float32 = tile_maps[0][0].tile_height;
+
     // NOTE(nahua): Day 29 - Differ from Casey as we cast the Array of Arrays into 1D array
     tile_maps[0][0].tiles.data = cast(*u32) *tiles00[0][0];
     tile_maps[0][0].tiles.count = TILE_MAP_COUNT_X * TILE_MAP_COUNT_Y;
@@ -206,18 +209,16 @@ game_update_and_render :: (thread: *Thread_Context, memory: *Game_Memory, input:
     tile_maps[1][1].tiles.data = cast(*u32) *tiles01[0][0];
     tile_maps[1][1].tiles.count = TILE_MAP_COUNT_X * TILE_MAP_COUNT_Y;
 
-    tile_map: *Tile_Map = *tile_maps[0][0];
-
     world: World;
     world.tile_map_count_x = 2;
     world.tile_map_count_y = 2;
     world.tile_maps.data = cast(*Tile_Map) *tile_maps[0][0];
     world.tile_maps.count = world.tile_map_count_x * world.tile_map_count_y;
 
-    player_width: float32 = tile_map.tile_width *0.75;
-    player_height: float32 = tile_map.tile_height;
-
     game_state: *Game_State = cast(*Game_State) memory.permanent_storage;
+
+    tile_map: *Tile_Map = get_tile_map(*world, game_state.player_tile_map_x, game_state.player_tile_map_y);
+    assert(tile_map != null);
 
     if !memory.is_initialized {
         memory.is_initialized = true;
