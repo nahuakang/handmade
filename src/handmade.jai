@@ -2,6 +2,7 @@
 #import "File";
 #import "Math";
 
+#load "handmade_intrinsics.jai";
 #load "handmade_platform.jai";
 
 
@@ -11,13 +12,14 @@ Tile_Map :: struct {
 
 
 World :: struct {
+    tile_side_in_meters: float32;
+    tile_side_in_pixels: s32;
+
     count_x: s32;
     count_y: s32;
 
     upper_left_x: float32;
     upper_left_y: float32;
-    tile_width: float32;
-    tile_height: float32;
 
     // TODO(nahua): Beginner's sparseness
     tile_map_count_x: s32;
@@ -29,15 +31,27 @@ World :: struct {
 
 
 Canonical_Position :: struct {
+    /* TODO(nahua):
+       Take the tile map x and y
+       and the tile x and y
+       and pack them into single 32-bit values for x and y
+       where there is some low bits for the tile index
+       and the high bits are the tile "page"
+
+       (NOTE we can eliminate the need for floor!)
+    */
     tile_map_x: s32;
     tile_map_y: s32;
 
     tile_x: s32;
     tile_y: s32;
 
-    // NOTE(nahua): These are tile-relative x and y
-    x: float32;
-    y: float32;
+    /* TODO(nahua):
+       Convert these to math-friendly, resolution independent representation of
+       world units relative to a tile.
+    */
+    tile_rel_x: float32;
+    tile_rel_y: float32;
 }
 
 
@@ -111,12 +125,6 @@ draw_rectangle :: (buffer: *Game_Offscreen_Buffer, x: float32, y: float32, w: fl
 
         row += buffer.pitch;
     }
-}
-
-
-round_float32_to_s32 :: inline (number: float32) -> s32 {
-    result := cast(s32) (number + 0.5);
-    return result;
 }
 
 
@@ -225,15 +233,19 @@ game_update_and_render :: (thread: *Thread_Context, memory: *Game_Memory, input:
     world.tile_map_count_y = 2;
     world.count_x = TILE_MAP_COUNT_X;
     world.count_y = TILE_MAP_COUNT_Y;
-    world.upper_left_x = -30;
-    world.upper_left_y = 0;
-    world.tile_width = 60;
-    world.tile_height = 60;
-    world.tile_maps.data = cast(*Tile_Map) *tile_maps[0][0];
-    world.tile_maps.count = world.tile_map_count_x * world.tile_map_count_y;    
 
-    player_width: float32 = world.tile_width *0.75;
-    player_height: float32 = world.tile_height;
+    world.tile_maps.data = cast(*Tile_Map) *tile_maps[0][0];
+    world.tile_maps.count = world.tile_map_count_x * world.tile_map_count_y;
+
+    // TODO(nahua): Begin using tile side in meters
+    world.tile_side_in_meters = 1.4;
+    world.tile_side_in_pixels = 60;
+
+    world.upper_left_x = -cast(float32)(world.tile_side_in_pixels / 2);
+    world.upper_left_y = 0;
+
+    player_width: float32 = 0.75 * world.tile_side_in_pixels;
+    player_height: float32 = cast(float32) world.tile_side_in_pixels;
 
     game_state: *Game_State = cast(*Game_State) memory.permanent_storage;
 
@@ -285,8 +297,8 @@ game_update_and_render :: (thread: *Thread_Context, memory: *Game_Memory, input:
                 can_pos: Canonical_Position = get_canonical_position(*world, player_pos);
                 game_state.player_tile_map_x = can_pos.tile_map_x;
                 game_state.player_tile_map_y = can_pos.tile_map_y;
-                game_state.player_x = world.upper_left_x + world.tile_width * can_pos.tile_x + can_pos.x;
-                game_state.player_y = world.upper_left_y + world.tile_height * can_pos.tile_y + can_pos.y;
+                game_state.player_x = world.upper_left_x + world.tile_side_in_pixels * can_pos.tile_x + can_pos.tile_rel_x;
+                game_state.player_y = world.upper_left_y + world.tile_side_in_pixels * can_pos.tile_y + can_pos.tile_rel_y;
             }
         }
     }
@@ -301,10 +313,10 @@ game_update_and_render :: (thread: *Thread_Context, memory: *Game_Memory, input:
                 gray = 1.0;
             }
 
-            x: float32 = world.upper_left_x + (cast(float32)col) * world.tile_width;
-            y: float32 = world.upper_left_y + (cast(float32)row) * world.tile_height;
-            w: float32 = x + world.tile_width;
-            h: float32 = y + world.tile_height;
+            x: float32 = world.upper_left_x + (cast(float32)col) * world.tile_side_in_pixels;
+            y: float32 = world.upper_left_y + (cast(float32)row) * world.tile_side_in_pixels;
+            w: float32 = x + world.tile_side_in_pixels;
+            h: float32 = y + world.tile_side_in_pixels;
 
             draw_rectangle(buffer, x, y, w, h, gray, gray, gray);
         }
@@ -367,15 +379,15 @@ get_canonical_position :: (world: *World, pos: Raw_Position) -> Canonical_Positi
 
     x := pos.x - world.upper_left_x;
     y := pos.y - world.upper_left_y;
-    result.tile_x = cast(s32) floor(x / world.tile_width); // NOTE(nahua): Instead of FloorReal32ToInt32
-    result.tile_y = cast(s32) floor(y / world.tile_height); // NOTE(nahua): Instead of FloorReal32ToInt32
+    result.tile_x = cast(s32) floor(x / world.tile_side_in_pixels); // NOTE(nahua): Instead of FloorReal32ToInt32
+    result.tile_y = cast(s32) floor(y / world.tile_side_in_pixels); // NOTE(nahua): Instead of FloorReal32ToInt32
     // Calculate tile-relative x and y
-    result.x = x - result.tile_x * world.tile_width;
-    result.y = y - result.tile_y * world.tile_height;
-    assert(result.x >= 0);
-    assert(result.y >= 0);
-    assert(result.x < world.tile_width);
-    assert(result.y < world.tile_height);
+    result.tile_rel_x = x - result.tile_x * world.tile_side_in_pixels;
+    result.tile_rel_y = y - result.tile_y * world.tile_side_in_pixels;
+    assert(result.tile_rel_x >= 0);
+    assert(result.tile_rel_y >= 0);
+    assert(result.tile_rel_x < cast(float32) world.tile_side_in_pixels);
+    assert(result.tile_rel_y < cast(float32) world.tile_side_in_pixels);
 
     if result.tile_x < 0 {
         result.tile_x = world.count_x + result.tile_x;
