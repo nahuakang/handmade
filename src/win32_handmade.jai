@@ -881,6 +881,7 @@ main :: () {
             game_memory.transient_storage_size = Gigabytes(cast(u64) 1);
 
             // TODO(nahua): Handle various memory footprints (USING SYSTEM METRICS)
+            // TODO(nahua): TransientStorage needs to be broken up into game transient and cache transiet, and only the former need to be saved for state playback
             win32_state.total_size        = game_memory.permanent_storage_size + game_memory.transient_storage_size;
             win32_state.game_memory_block = VirtualAlloc(BASE_ADDRESS, xx win32_state.total_size, MEM_RESERVE|MEM_COMMIT, PAGE_READWRITE);
             game_memory.permanent_storage = win32_state.game_memory_block;

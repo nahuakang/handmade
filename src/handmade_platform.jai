@@ -110,6 +110,31 @@ Thread_Context :: struct {
 Game Structs
 */
 
+
+// TODO(nahua): This can become "world position" or something similar
+Canonical_Position :: struct {
+    /* TODO(nahua):
+       Take the tile map x and y
+       and the tile x and y
+       and pack them into single 32-bit values for x and y
+       where there is some low bits for the tile index
+       and the high bits are the tile "page"
+
+       (NOTE we can eliminate the need for floor!)
+    */
+    tile_map_x: s32;
+    tile_map_y: s32;
+
+    tile_x: s32;
+    tile_y: s32;
+
+    // TODO(nahua): Y should go up!
+    // TODO(nahua): Should these be from the center of a tile?
+    tile_rel_x: float32;
+    tile_rel_y: float32;
+}
+
+
 Game_Offscreen_Buffer :: struct {
     memory:          *void;
     width:           s32;
@@ -191,11 +216,7 @@ Game_Memory :: struct {
 
 
 Game_State :: struct {
-    player_tile_map_x: s32;
-    player_tile_map_y: s32;
-
-    player_x: float32;
-    player_y: float32;
+    player_p: Canonical_Position;
 }
 
 
